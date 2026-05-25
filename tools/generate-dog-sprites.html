@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Boss Rush — Dog Sprite Generator</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#080810;color:#e8dcc8;font-family:"Courier New",monospace;padding:20px;max-width:1100px;margin:0 auto;}
+h1{color:#FFD700;font-size:14px;letter-spacing:2px;}
+.sub{color:#555;font-size:9px;line-height:1.9;margin:12px 0;}
+#status{color:#88aa88;font-size:9px;margin:8px 0;}
+</style>
+</head>
+<body>
+<h1>BOSS RUSH — DOG SPRITES</h1>
+<p class="sub">
+  Combat portraits (96px): <strong>side profile</strong> dogs facing left (snout toward enemy row).<br>
+  Trash = lean mutt; mini/planet/capstone = bigger silhouette + unique boss props.<br>
+  Run <code>npm run sprites:dogs</code> to export.
+</p>
+<p id="status">Building…</p>
+<script>
+const exports = [];
+
+const PALETTES = {
+  human: { o: "#0a0a12", fur: "#c8a070", hi: "#e8c890", sh: "#8a6038", acc: "#5588cc", eye: "#1a1a28", nose: "#3a2820", tongue: "#e85868" },
+  monster: { o: "#0a0a12", fur: "#68b848", hi: "#98e878", sh: "#388828", acc: "#a848c8", eye: "#ff4040", nose: "#284818", tongue: "#88ff88" },
+  hell: { o: "#0a0a12", fur: "#8a2828", hi: "#c84848", sh: "#4a1010", acc: "#ff4488", eye: "#ffcc00", nose: "#2a0808", tongue: "#ff6060" },
+  space: { o: "#0a0a12", fur: "#4a6888", hi: "#78a8c8", sh: "#283848", acc: "#88e8ff", eye: "#a0f0ff", nose: "#1a3040", tongue: "#68c8e8" },
+  alien: { o: "#0a0a12", fur: "#68c8a0", hi: "#98f0c8", sh: "#388860", acc: "#c878ff", eye: "#101010", nose: "#204838", tongue: "#78ffa8" },
+  mirror: { o: "#0a0a12", fur: "#7a78a8", hi: "#aaa8d8", sh: "#4a4868", acc: "#d8d0ff", eye: "#e8e8ff", nose: "#3a3858", tongue: "#b8b0e8" },
+  heaven_low: { o: "#0a0a12", fur: "#f0e8c8", hi: "#fff8e0", sh: "#c8b888", acc: "#ffd858", eye: "#4088ff", nose: "#8a7858", tongue: "#f0a0a0" },
+  olympus: { o: "#0a0a12", fur: "#d8c070", hi: "#fff0a0", sh: "#a88840", acc: "#ffe040", eye: "#1a1a28", nose: "#6a5020", tongue: "#e87858" },
+  pantheon: { o: "#0a0a12", fur: "#e8d8b0", hi: "#fff8e8", sh: "#b8a070", acc: "#c8a030", eye: "#6020a0", nose: "#7a6848", tongue: "#d0a070" },
+  angelic: { o: "#0a0a12", fur: "#f8f0ff", hi: "#ffffff", sh: "#d0c8e0", acc: "#88c8ff", eye: "#2840a0", nose: "#a898b8", tongue: "#ffb0c0" },
+};
+
+const PLANET_TINT = {
+  mercury: { fur: "#b8b0a0", acc: "#ffaa44" },
+  venus: { fur: "#e8c878", acc: "#88cc44" },
+  earth: { fur: "#6a9a58", acc: "#4488cc" },
+  mars: { fur: "#c86048", acc: "#ff8844" },
+  jupiter: { fur: "#d8a868", acc: "#c87838" },
+  saturn: { fur: "#e8d0a0", acc: "#f0e8c8" },
+  uranus: { fur: "#78d8e8", acc: "#a8f0ff" },
+  neptune: { fur: "#4868c8", acc: "#6888ff" },
+};
+
+function hash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function parseKey(key) {
+  if (key === "angelic_cap_doggod") return { theme: "angelic", tier: "capstone", tag: "doggod" };
+  if (key === "hell_trash_powerpup") return { theme: "hell", tier: "trash", tag: "powerpup", variant: 2 };
+  if (key.startsWith("space_planet_")) {
+    return { theme: "space", tier: "planet", planet: key.replace("space_planet_", "") };
+  }
+  const p = key.split("_");
+  const theme = p[0] in PALETTES ? p[0] : "human";
+  if (p[1] === "trash") return { theme, tier: "trash", variant: parseInt(p[2], 10) || 0 };
+  if (p[1] === "mini") return { theme, tier: "mini", tag: p.slice(2).join("_") };
+  if (p[1] === "cap") return { theme, tier: "capstone", tag: p.slice(2).join("_") };
+  return { theme, tier: "trash", variant: 0 };
+}
+
+function makeCanvas(size) {
+  const cv = document.createElement("canvas");
+  cv.width = size;
+  cv.height = size;
+  return { cv, ctx: cv.getContext("2d") };
+}
+
+/** Left-facing side profile — snout left, haunches right. */
+function drawDogSideProfile(px, pal, opts = {}) {
+  const {
+    bulky = false,
+    snoutLong = false,
+    earFloppy = false,
+    tongueOut = false,
+    collar = true,
+  } = opts;
+  const o = pal.o;
+
+  const y0 = bulky ? 5 : 6;
+  const bodyW = bulky ? 11 : 9;
+  const bodyH = bulky ? 9 : 8;
+
+  // Haunches / rear
+  px(16, y0 + 4, 5, bodyH - 2, pal.fur);
+  px(17, y0 + 5, 4, bodyH - 4, pal.hi);
+  px(20, y0 + 3, 2, 4, pal.sh);
+
+  // Chest + belly
+  px(9, y0 + 5, bodyW, bodyH - 1, pal.fur);
+  px(10, y0 + 6, bodyW - 2, bodyH - 3, pal.hi);
+  px(9, y0 + 5, 1, bodyH, pal.sh);
+
+  // Neck
+  px(8, y0 + 3, 4, 5, pal.fur);
+  px(8, y0 + 3, 1, 5, pal.sh);
+
+  // Head block
+  px(5, y0 + 1, 5, 6, pal.fur);
+  px(6, y0 + 2, 4, 4, pal.hi);
+
+  // Snout (extends left)
+  const snoutLen = snoutLong ? 5 : 4;
+  px(2, y0 + 3, snoutLen, 3, pal.hi);
+  px(1, y0 + 4, 2, 2, pal.sh);
+  px(0, y0 + 4, 1, 2, pal.nose);
+
+  // Jaw underline
+  px(3, y0 + 5, snoutLen, 1, pal.sh);
+
+  // Ear (one visible — back of head)
+  if (earFloppy) {
+    px(7, y0, 3, 3, pal.fur);
+    px(8, y0 + 1, 2, 2, pal.sh);
+  } else {
+    px(8, y0, 2, 4, pal.fur);
+    px(8, y0, 1, 4, pal.sh);
+  }
+
+  // Eye (side — one)
+  px(6, y0 + 3, 2, 2, pal.eye);
+  px(6, y0 + 3, 1, 1, "#f8f8ff");
+
+  // Legs (profile)
+  px(10, y0 + bodyH + 3, 2, 4, pal.sh);
+  px(14, y0 + bodyH + 3, 2, 4, pal.sh);
+  px(18, y0 + bodyH + 2, 2, 4, pal.sh);
+  px(11, y0 + bodyH + 4, 1, 2, pal.fur);
+  px(15, y0 + bodyH + 4, 1, 2, pal.fur);
+
+  // Tail (curves up behind)
+  px(19, y0 + 1, 2, 2, pal.fur);
+  px(20, y0, 2, 3, pal.acc);
+  px(21, y0 - 1, 1, 2, pal.acc);
+
+  if (collar) {
+    px(8, y0 + 6, 4, 1, pal.acc);
+  }
+  if (tongueOut) {
+    px(1, y0 + 5, 2, 2, pal.tongue);
+  }
+
+  // Outline accents
+  px(5, y0, 1, 1, o);
+  px(0, y0 + 3, 1, 1, o);
+  px(16, y0 + bodyH + 6, 5, 1, o);
+}
+
+/** Eight distinct trash shapes (variant 0–7), all left-facing side profile. */
+const TRASH_SILHOUETTES = {
+  stubby: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: true, snoutLong: false, earFloppy: true, tongueOut: v % 2 === 0, collar: true });
+    px(18, 14, 3, 2, pal.sh);
+  },
+  longsnout: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: false, snoutLong: true, earFloppy: false, tongueOut: true, collar: v % 2 === 1 });
+    px(0, 8, 2, 1, pal.hi);
+  },
+  tallEars: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: false, snoutLong: false, earFloppy: false, tongueOut: false, collar: true });
+    px(8, 0, 2, 6, pal.fur);
+    px(9, 0, 1, 5, pal.sh);
+    px(7, 1, 1, 4, pal.hi);
+  },
+  spotted: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: v % 2 === 0, snoutLong: false, earFloppy: v % 3 === 0, tongueOut: false, collar: false });
+    px(11, 7, 2, 2, pal.sh);
+    px(14, 9, 2, 2, pal.sh);
+    px(9, 10, 1, 1, pal.sh);
+  },
+  floppy: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: false, snoutLong: false, earFloppy: true, tongueOut: v % 2 === 0, collar: true });
+    px(6, 0, 4, 4, pal.fur);
+    px(7, 1, 3, 3, pal.sh);
+  },
+  lean: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: false, snoutLong: true, earFloppy: false, tongueOut: false, collar: true });
+    px(17, 6, 4, 3, pal.fur);
+    px(18, 7, 2, 2, pal.hi);
+    px(19, 5, 1, 3, pal.sh);
+    px(20, 2, 3, 4, pal.acc);
+  },
+  chubby: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: true, snoutLong: false, earFloppy: v % 2 === 1, tongueOut: true, collar: true });
+    px(8, 11, 8, 3, pal.hi);
+    px(9, 12, 6, 2, pal.fur);
+  },
+  spiky: (px, pal, v) => {
+    drawDogSideProfile(px, pal, { bulky: false, snoutLong: false, earFloppy: false, tongueOut: v % 3 !== 0, collar: true });
+    px(8, 0, 2, 2, pal.acc);
+    px(10, 0, 2, 2, pal.acc);
+    px(12, 1, 2, 2, pal.acc);
+    px(19, 0, 2, 3, pal.acc);
+    px(20, 1, 1, 2, pal.sh);
+  },
+};
+
+const TRASH_SILHOUETTE_KEYS = Object.keys(TRASH_SILHOUETTES);
+
+function drawBossUnique(spriteKey, info, px, pal) {
+  const { tag, planet, theme, tier } = info;
+
+  if (planet && PLANET_TINT[planet]) {
+    const t = PLANET_TINT[planet];
+    px(1, 2, 4, 4, t.acc);
+    if (planet === "saturn") {
+      px(12, 11, 10, 1, t.acc);
+      px(10, 10, 1, 3, t.acc);
+      px(22, 10, 1, 3, t.acc);
+    } else if (planet === "jupiter") {
+      px(11, 9, 8, 2, t.acc);
+      px(12, 10, 6, 1, "#c87838");
+    } else if (planet === "earth") {
+      px(14, 8, 4, 4, "#4488cc");
+      px(15, 9, 2, 2, "#6a9a58");
+    } else if (planet === "mars") {
+      px(0, 8, 3, 3, "#ff4422");
+    } else if (planet === "neptune") {
+      px(18, 14, 4, 3, "#2840a8");
+    }
+    return;
+  }
+
+  if (tag === "guy_dog" || (tier === "capstone" && theme === "human")) {
+    px(14, 4, 4, 10, "#6a8a9a");
+    px(15, 5, 2, 8, "#88aa88");
+    px(16, 3, 2, 2, "#e8c8a0");
+    px(7, 14, 3, 1, pal.acc);
+    return;
+  }
+  if (tag === "chimera") {
+    px(2, 0, 5, 2, pal.acc);
+    px(3, 1, 3, 2, pal.hi);
+    px(20, 12, 4, 2, pal.acc);
+    px(21, 13, 3, 5, "#68c848");
+    px(22, 15, 2, 4, pal.sh);
+    return;
+  }
+  if (tag === "devil_pair") {
+    px(16, 2, 5, 9, "#ff4488");
+    px(17, 3, 3, 7, "#cc2266");
+    px(18, 1, 2, 2, pal.acc);
+    px(19, 0, 2, 2, pal.acc);
+    return;
+  }
+  if (tag === "solar") {
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2;
+      const sx = 12 + Math.round(Math.cos(ang) * 9);
+      const sy = 10 + Math.round(Math.sin(ang) * 7);
+      px(sx, sy, 2, 2, "#ffe040");
+    }
+    px(10, 6, 8, 8, "#ffb830");
+    px(11, 7, 6, 6, "#fff0a0");
+    return;
+  }
+  if (tag === "galaxy_apex") {
+    px(17, 1, 4, 3, pal.acc);
+    px(18, 0, 2, 5, pal.acc);
+    px(5, 2, 2, 1, "#c878ff");
+    px(7, 4, 2, 1, "#c878ff");
+    px(4, 6, 1, 1, "#88ff88");
+    return;
+  }
+  if (tag === "inverted") {
+    px(2, 16, 3, 2, pal.acc);
+    px(18, 4, 2, 2, pal.hi);
+    px(12, 0, 6, 1, "#d8d0ff");
+    return;
+  }
+  if (tag === "seraph") {
+    px(10, 0, 8, 2, "#fff8c0");
+    px(8, 1, 2, 5, "#fff8e8");
+    px(18, 1, 2, 5, "#fff8e8");
+    px(11, 0, 6, 1, pal.acc);
+    return;
+  }
+  if (tag === "zeusion") {
+    px(11, 0, 2, 6, "#fff0a0");
+    px(12, 0, 1, 8, "#ffe040");
+    px(13, 1, 3, 2, "#ffffff");
+    px(10, 2, 1, 4, "#ffe040");
+    return;
+  }
+  if (tag === "unnamed") {
+    px(8, 0, 10, 3, "#1a1030");
+    px(9, 1, 8, 14, "#2a1848");
+    px(10, 4, 6, 8, "#402060");
+    px(12, 6, 2, 4, pal.acc);
+    px(4, 3, 1, 1, "#fff8e0");
+    px(20, 5, 1, 1, "#fff8e0");
+    return;
+  }
+  if (tag === "doggod") {
+    px(2, 4, 14, 14, "#f0e8ff");
+    px(4, 6, 10, 10, "#ffffff");
+    px(6, 8, 6, 6, pal.eye);
+    px(7, 9, 4, 4, "#1020a0");
+    px(8, 10, 2, 2, "#000000");
+    px(5, 7, 1, 1, pal.acc);
+    px(11, 7, 1, 1, pal.acc);
+    px(3, 5, 2, 1, "#ffd858");
+    px(13, 5, 2, 1, "#ffd858");
+    return;
+  }
+
+  if (tag === "powerpup") {
+    px(4, 5, 10, 7, "#ff88aa");
+    px(6, 7, 6, 4, "#ff4488");
+    px(7, 2, 2, 2, pal.acc);
+    return;
+  }
+
+  // Themed mini-boss flourishes
+  if (tier === "mini") {
+    if (tag === "hoa_chair") px(15, 8, 5, 4, "#6a5040");
+    if (tag === "lair_keeper") px(18, 10, 4, 5, pal.acc);
+    if (tag === "pit_captain") px(16, 2, 3, 3, "#ff6622");
+    if (tag === "hive_alpha") px(17, 0, 3, 4, pal.acc);
+    if (tag === "gate_guard") px(9, 0, 8, 2, "#fff8c0");
+    if (tag === "hero_hound") px(10, 0, 4, 3, "#ffe040");
+    if (tag === "high_priest") px(8, 0, 2, 5, pal.acc);
+    if (tag === "arch_pup") px(10, 0, 6, 2, pal.acc);
+  }
+}
+
+function applyPoseOverlay(px, pal, pose) {
+  if (pose === "alert") {
+    px(3, 1, 2, 2, "#ffffff");
+    px(7, 2, 1, 3, "#88bbee");
+    px(10, 8, 6, 1, pal.sh);
+  } else if (pose === "hurt") {
+    px(5, 3, 4, 2, "#e8e8f0");
+    px(6, 4, 2, 1, "#d03030");
+    px(12, 10, 3, 2, "#d03030");
+    px(9, 14, 2, 1, "#d03030");
+  }
+}
+
+function drawDogCombat(spriteKey, pose) {
+  const info = parseKey(spriteKey);
+  let pal = { ...PALETTES[info.theme] || PALETTES.human };
+  if (info.planet && PLANET_TINT[info.planet]) {
+    pal = { ...pal, fur: PLANET_TINT[info.planet].fur, acc: PLANET_TINT[info.planet].acc };
+  }
+
+  const h = hash(spriteKey);
+  const v = info.variant ?? h % 8;
+  const isBoss = info.tier === "capstone" || info.tier === "planet";
+  const isMini = info.tier === "mini";
+  const isTrash = info.tier === "trash";
+
+  const size = 96;
+  const { cv, ctx } = makeCanvas(size);
+  const u = size / 24;
+  const px = (gx, gy, w, hgt, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(gx * u), Math.round(gy * u), Math.round(w * u), Math.round(hgt * u));
+  };
+
+  if (isBoss) {
+    drawBossUnique(spriteKey, info, px, pal);
+    drawDogSideProfile(px, pal, {
+      bulky: true,
+      snoutLong: true,
+      earFloppy: info.tag === "guy_dog",
+      tongueOut: (h + v) % 2 === 0,
+      collar: info.tag !== "doggod",
+    });
+  } else if (isMini) {
+    drawBossUnique(spriteKey, info, px, pal);
+    drawDogSideProfile(px, pal, {
+      bulky: true,
+      snoutLong: false,
+      earFloppy: v % 3 === 0,
+      tongueOut: (h + v) % 3 === 0,
+      collar: true,
+    });
+  } else if (isTrash) {
+    const silKey = TRASH_SILHOUETTE_KEYS[v % TRASH_SILHOUETTE_KEYS.length];
+    TRASH_SILHOUETTES[silKey](px, pal, v);
+    if (info.tag === "powerpup") drawBossUnique(spriteKey, info, px, pal);
+    else if (info.theme === "monster" && v % 2 === 1) {
+      px(20, 12, 2, 4, pal.acc);
+    } else if (info.theme === "hell") {
+      px(7, 1, 2, 2, pal.acc);
+    } else if (info.theme === "alien") {
+      px(8, 0, 2, 2, pal.acc);
+    }
+  } else {
+    drawDogSideProfile(px, pal, {
+      bulky: v % 4 === 0,
+      snoutLong: v % 5 === 0,
+      earFloppy: v % 2 === 1,
+      tongueOut: (h + v) % 3 !== 0,
+      collar: v % 3 !== 1,
+    });
+  }
+
+  applyPoseOverlay(px, pal, pose);
+
+  return cv;
+}
+
+window.buildAllSprites = function buildAllSprites() {
+  exports.length = 0;
+  const keys = window.SPRITE_KEYS || [];
+  for (const key of keys) {
+    for (const pose of ["healthy", "alert", "hurt"]) {
+      const cv = drawDogCombat(key, pose);
+      const zipPath = `${key}/combat_${pose}.png`;
+      exports.push({ cv, zipPath });
+    }
+  }
+  window.exports = exports;
+  const el = document.getElementById("status");
+  if (el) el.textContent = `Ready: ${exports.length} side-profile sprites (${keys.length} keys).`;
+};
+
+if (window.SPRITE_KEYS?.length) {
+  window.buildAllSprites();
+} else {
+  document.getElementById("status").textContent =
+    "Waiting for SPRITE_KEYS injection (use npm run sprites:dogs).";
+}
+</script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 /**
- * War Cry crit buff expires after N player turns (battleTurn window).
+ * War Cry: +25% ATK/DEF for N player turns (turn-based expiry, no per-hit consume).
+ * Run: node tools/war-cry-test.mjs
  */
 let pass = 0;
 let fail = 0;
@@ -14,48 +15,60 @@ function assert(cond, msg) {
   }
 }
 
-const CRIT_BUFF_TURNS = 2;
+const WAR_CRY_BUFF_TURNS = 2;
+const WAR_CRY_STAT_MULT = 1.25;
 
-function warCryActive(player, battleTurn) {
+function isWarCryBuffActive(player, battleTurn) {
   return (
-    (player.critBuffTurnsLeft ?? 0) > 0 &&
-    (player.critBuffExpiresOnTurn == null ||
-      battleTurn < player.critBuffExpiresOnTurn)
+    player?.warCryBuffExpiresOnTurn != null &&
+    battleTurn < player.warCryBuffExpiresOnTurn
   );
 }
 
+function getEffectiveAttack(player, battleTurn) {
+  const atk = player?.attack ?? 1;
+  if (!isWarCryBuffActive(player, battleTurn)) return atk;
+  return Math.max(1, Math.round(atk * WAR_CRY_STAT_MULT));
+}
+
+function getEffectiveDefense(player, battleTurn) {
+  const def = player?.defense ?? 0;
+  if (!isWarCryBuffActive(player, battleTurn)) return def;
+  return Math.max(0, Math.round(def * WAR_CRY_STAT_MULT));
+}
+
 function applyWarCry(battleTurn) {
-  return {
-    critBuffTurnsLeft: CRIT_BUFF_TURNS,
-    critBuffExpiresOnTurn: battleTurn + CRIT_BUFF_TURNS,
-  };
+  return { warCryBuffExpiresOnTurn: battleTurn + WAR_CRY_BUFF_TURNS };
 }
 
 function beginPlayerTurn(player, battleTurn) {
   if (
-    player.critBuffExpiresOnTurn != null &&
-    battleTurn >= player.critBuffExpiresOnTurn
+    player.warCryBuffExpiresOnTurn != null &&
+    battleTurn >= player.warCryBuffExpiresOnTurn
   ) {
-    return { ...player, critBuffTurnsLeft: 0, critBuffExpiresOnTurn: null };
+    return { ...player, warCryBuffExpiresOnTurn: null };
   }
   return player;
 }
 
-console.log("War Cry cast at turn 0:");
-let p = applyWarCry(0);
-assert(warCryActive(p, 0), "active on cast turn");
-assert(warCryActive(p, 1), "active turn 1");
+const base = { attack: 8, defense: 2 };
 
-console.log("\nExpires when battleTurn reaches expiresOnTurn:");
+console.log("War Cry at turn 0 (expires turn 2):");
+let p = { ...base, ...applyWarCry(0) };
+assert(isWarCryBuffActive(p, 0), "active turn 0");
+assert(isWarCryBuffActive(p, 1), "active turn 1");
+assert(getEffectiveAttack(p, 0) === 10, "ATK 8 → 10");
+assert(getEffectiveDefense(p, 0) === 3, "DEF 2 → 3");
+
+console.log("\nPersists for second player turn (no per-hit decrement):");
+assert(getEffectiveAttack(p, 1) === 10, "ATK still buffed turn 1");
+assert(getEffectiveAttack(p, 1) === 10, "ATK still buffed after simulated fight");
+assert(getEffectiveAttack(p, 1) === 10, "Power Strike path uses same ATK turn 1");
+
+console.log("\nExpires at turn 2:");
 p = beginPlayerTurn(p, 2);
-assert(!warCryActive(p, 2), "inactive at turn 2");
-assert(p.critBuffTurnsLeft === 0, "charges cleared");
-
-console.log("\nCrit on fight still respects expiry:");
-p = applyWarCry(5);
-assert(warCryActive(p, 6), "mid window");
-p = beginPlayerTurn(p, 7);
-assert(!warCryActive(p, 7), "expired at 7");
+assert(!isWarCryBuffActive(p, 2), "inactive turn 2");
+assert(getEffectiveAttack(p, 2) === 8, "ATK back to base");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

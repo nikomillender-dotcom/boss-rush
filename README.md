@@ -2,6 +2,8 @@
 
 Turn-based cat-vs-dog gauntlet — survive endless scaled foes, build coin streaks, and pick your class.
 
+**Play (production):** https://boss-rush-six.vercel.app
+
 ## Run locally
 
 ```bash
@@ -60,6 +62,24 @@ Saves use `localStorage` and persist in the installed app. After the first onlin
 - **Battle:** back-facing `combat_*.png` (96px) so the cat faces the enemy at the top of the screen.
 
 Regenerate: `npm run sprites` (or `tools/generate-cat-sprites.html`). See `public/sprites/cats/README.md`.
+
+## Enemy dog sprites & 1000 floors
+
+- **10 themed blocks** of 100 floors (suburban → angelic), then **free play** from floor 1001.
+- **Battle portraits:** `public/sprites/dogs/{spriteKey}/combat_*.png` (back-facing, toward the cat).
+- Regenerate: `npm run sprites:dogs` (requires Playwright Chromium).
+- Floor map and screenshot list: [`docs/enemy-themes.md`](docs/enemy-themes.md).
+
+## Music (CC0)
+
+- **Camp + battle:** one Kenney loop per theme block (`public/audio/themes/*.ogg`) plus `camp.ogg`.
+- **Credits:** [`CREDITS.txt`](CREDITS.txt) — do not substitute copyrighted game rips (e.g. Final Fantasy).
+- **Fetch loops:** `npm run music:themes` (downloads from Kenney CC0 mirror).
+- **Mute:** ♪ / 🔇 on the battle control bar; preference saved in `localStorage`.
+
+## Marketing
+
+- Ad / Claude handoff: [`docs/marketing-handoff.md`](docs/marketing-handoff.md)
 
 ## Camp loop
 

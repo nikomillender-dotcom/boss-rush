@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "sprites": "node tools/export-sprites.mjs",
+    "sprites:dogs": "node tools/export-dog-sprites.mjs",
+    "music:themes": "node tools/prepare-theme-music.mjs",
     "pwa-icons": "node tools/generate-pwa-icons.mjs"
   },
   "dependencies": {

@@ -3,3 +3,7 @@ dist
 .DS_Store
 *.local
 .cursor
+
+.vercel
+tools/_kenney-*.zip
+tools/_jingles_extract/

@@ -10,7 +10,7 @@ export default defineConfig({
       includeAssets: ["icons/icon-192.png", "icons/icon-512.png"],
       manifest: false,
       workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2}"],
+        globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2,ogg}"],
         navigateFallback: "index.html",
       },
     }),

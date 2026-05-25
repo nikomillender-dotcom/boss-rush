@@ -3,14 +3,14 @@
  *
  * Architecture overview:
  *   - GAME_CONFIG: all tunable numbers in one place
- *   - CLASSES / ENEMIES: data-driven content (easy to add more)
+ *   - CLASSES / enemy catalog (src/content/enemyThemes.js): data-driven content
  *   - useGameEngine: custom hook with all game logic
  *   - Scene components: TitleScreen, ClassSelect, BattleScene, GameOverScreen
  *   - UI components: HUD, EnemyPanel, PlayerPanel, ActionButtons, SkillMenu, BattleLog, FloatingNumber
  *
  * Extending this game:
  *   - Add a class: add an entry to CLASSES with skills array
- *   - Add an enemy: add an entry to ENEMIES (they scale automatically)
+ *   - Add an enemy: add an entry to ENEMY_CATALOG in enemyThemes.js
  *   - Add a skill: add to a class's skills[] and add a handler in executeSkill()
  *   - Add a shop: create a ShopScreen component, add "shop" to scene state, trigger between rounds
  *   - Add equipment: extend player state with an `equipment` object, apply stat modifiers
@@ -20,9 +20,16 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
+  unlockAudio,
+  playCampMusic,
+  playThemeForRound,
+  stopAllMusic,
+  getMusicMuted,
+  setMusicMuted,
+} from "./src/audio/themeMusic.js";
+import {
   SCALING_CONFIG,
   isBossRound,
-  buildEnemy as buildScaledEnemy,
   getEnemyPoolIndex,
   hpPrice,
   atkPrice,
@@ -57,6 +64,17 @@ import {
   hasAnyReadySkill,
 } from "./src/battle/ff1TurnResolver.js";
 import { t, setLocale } from "./src/i18n/index.js";
+import {
+  resolveEnemyTemplate,
+  buildEnemyFromCatalog,
+  getCatalogEntry,
+  getCatalogEntryByIndex,
+  isFreePlayRound,
+  isThemeTransitionFloor,
+  getThemeBlock,
+  getAllEnemySpriteKeys,
+  FREE_PLAY_START,
+} from "./src/content/enemyThemes.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURATION — tweak these to balance the game
@@ -87,7 +105,8 @@ const GAME_CONFIG = {
   critMultiplier: 2.5,
   blockReduction: 0.4,
   defendBlockReduction: 0.55,
-  critBuffTurns: 2,
+  warCryBuffTurns: 2,
+  warCryStatMult: 1.25,
   fireMeltBonus: 1.1,
 
   // Timing (ms) — multiplied by 1 / battleSpeedMultiplier in combat
@@ -413,9 +432,9 @@ const CLASSES = {
         id: "war_cry",
         name: "War Cry",
         icon: "📯",
-        description: "Next 2 FIGHTs can crit (2.5×)",
+        description: "+25% ATK & DEF for 2 player turns",
         cooldown: 5,
-        type: "buff_crit",
+        type: "buff_war_cry",
       },
     ],
   },
@@ -885,10 +904,43 @@ function getSkillUpgradeLevel(save, classKey, skillId) {
 }
 
 function cooldownFromLevel(baseCooldown, level) {
-  let cd = baseCooldown;
+  let cd = baseCooldown ?? 1;
   if (level >= 5) cd -= 1;
   if (level >= 10) cd -= 1;
   return Math.max(1, cd);
+}
+
+/** Apply post-cast cooldown to one skill (sync-safe for playerRef). */
+function applySkillCastCooldown(skills, skillIndex) {
+  return skills.map((s, i) => {
+    if (i !== skillIndex) return s;
+    const cd = Math.max(1, s.cooldown ?? 1);
+    return { ...s, currentCooldown: cd };
+  });
+}
+
+function isWarCryBuffActive(player, battleTurn) {
+  return (
+    player?.warCryBuffExpiresOnTurn != null &&
+    battleTurn < player.warCryBuffExpiresOnTurn
+  );
+}
+
+function getWarCryBuffTurnsLeft(player, battleTurn) {
+  if (!isWarCryBuffActive(player, battleTurn)) return 0;
+  return Math.max(0, player.warCryBuffExpiresOnTurn - battleTurn);
+}
+
+function getEffectiveAttack(player, battleTurn) {
+  const atk = player?.attack ?? 1;
+  if (!isWarCryBuffActive(player, battleTurn)) return atk;
+  return Math.max(1, Math.round(atk * GAME_CONFIG.warCryStatMult));
+}
+
+function getEffectiveDefense(player, battleTurn) {
+  const def = player?.defense ?? 0;
+  if (!isWarCryBuffActive(player, battleTurn)) return def;
+  return Math.max(0, Math.round(def * GAME_CONFIG.warCryStatMult));
 }
 
 function calcHealAmount(baseHeal, level) {
@@ -1096,18 +1148,35 @@ function describeSkillUpgrade(baseSkill, nextLevel, previewAttack = 5, classKey 
   return parts.length ? parts.join(", ") : "Stronger effect";
 }
 
-const ENEMIES = [
-  { name: "Yard Terrier",      icon: "🐕", maxHp: 8,  attack: 1, speed: 4, reward: 8,   lore: "A yapping nuisance from the neighbor's fence." },
-  { name: "Hay Bale Hound",    icon: "🐕‍🦺", maxHp: 10, attack: 2, speed: 5, reward: 12,  lore: "Stuffed with spite. It never blinks." },
-  { name: "Iron Mastiff",      icon: "🐕", maxHp: 14, attack: 2, speed: 4, reward: 16,  lore: "Smells terrible. Bites harder." },
-  { name: "Doom Schnauzer",   icon: "🐩", maxHp: 12, attack: 3, speed: 7, reward: 22,  lore: "Forbidden treats corrupted its soul." },
-  { name: "Stone Bulldog",     icon: "🐕", maxHp: 22, attack: 2, speed: 3, reward: 28,  lore: "Ancient and mercilessly unyielding." },
-  { name: "Shadow Setter",     icon: "🐕", maxHp: 18, attack: 4, speed: 8, reward: 38,  lore: "A disgraced show dog. No honor remains." },
-  { name: "Plague Mutt King",  icon: "🐕", maxHp: 16, attack: 4, speed: 6, reward: 35,  lore: "Endless hunger. Endless drool.", special: { name: "Rabid Snap", chance: 0.18, damageMult: 1.4 } },
-  { name: "Alpha Hound",       icon: "🐕‍🦺", maxHp: 32, attack: 5, speed: 7, reward: 65,  lore: "Millennia of fetch compressed into fury.", special: { name: "Bone Crunch", chance: 0.22, damageMult: 1.5 } },
-  { name: "Chaos Cerberus",    icon: "🐕", maxHp: 30, attack: 6, speed: 9, reward: 85,  lore: "Three heads. Zero mercy.", special: { name: "Triple Bite", chance: 0.25, damageMult: 1.45 } },
-  { name: "OMEGA OVERDOG",     icon: "🐕", maxHp: 50, attack: 8, speed: 10, reward: 130, lore: "The end of all yarn. This is final.", special: { name: "Omega Howl", chance: 0.28, damageMult: 1.55 } },
-];
+function dogSpritePath(spriteKey, filename) {
+  return `/sprites/dogs/${spriteKey}/${filename}`;
+}
+
+const ENEMY_SPRITES = Object.fromEntries(
+  getAllEnemySpriteKeys().map((key) => [
+    key,
+    {
+      combat: {
+        healthy: dogSpritePath(key, "combat_healthy.png"),
+        alert: dogSpritePath(key, "combat_alert.png"),
+        hurt: dogSpritePath(key, "combat_hurt.png"),
+      },
+    },
+  ])
+);
+
+function getEnemyCombatSpriteUrl(enemy, state = "healthy") {
+  if (!enemy?.spriteKey) return null;
+  return ENEMY_SPRITES[enemy.spriteKey]?.combat?.[state] ?? null;
+}
+
+function getEnemyCombatSpriteState(hp, maxHp, playerAttack, enemy) {
+  if (maxHp > 0 && hp / maxHp <= 0.35) return "hurt";
+  if (enemy?.attack >= playerAttack || enemy?.isBoss || enemy?.tier === "capstone") {
+    return "alert";
+  }
+  return "healthy";
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
@@ -1133,7 +1202,7 @@ function getStreakMultiplier(streak) {
 
 function getPlayerCombatSpriteState(hp, maxHp, enemy, playerAttack, round) {
   if (maxHp > 0 && hp / maxHp <= 0.35) return "hurt";
-  const poolIndex = getEnemyPoolIndex(round, ENEMIES.length);
+  const poolIndex = getEnemyPoolIndex(round, 10);
   const tough =
     (enemy && enemy.attack >= playerAttack) ||
     round >= 10 ||
@@ -1195,7 +1264,16 @@ function comboUnlockHint(comboKey) {
 }
 
 function buildEnemy(round) {
-  return buildScaledEnemy(round, ENEMIES, GAME_CONFIG);
+  const template = resolveEnemyTemplate(round);
+  return buildEnemyFromCatalog(round, template);
+}
+
+function getEnemyTemplateForFoe(foe) {
+  if (foe?.catalogId) return getCatalogEntry(foe.catalogId);
+  if (foe?.poolIndex != null && foe.poolIndex >= 0) {
+    return getCatalogEntryByIndex(foe.poolIndex);
+  }
+  return resolveEnemyTemplate(1);
 }
 
 /** Innate stats: sum of parent class bases only (no parent camp boosts). */
@@ -1254,8 +1332,7 @@ function buildPlayer(classKey, classMeta, save = null) {
       weapon: innate.weaponName,
       weaponId: comboMeta.equippedWeaponId,
       skills,
-      critBuffTurnsLeft: 0,
-      critBuffExpiresOnTurn: null,
+      warCryBuffExpiresOnTurn: null,
       hasDodgeBuff: false,
       hasBlockBuff: false,
       blockReductionNext: null,
@@ -1289,8 +1366,7 @@ function buildPlayer(classKey, classMeta, save = null) {
     weapon: weapon?.name ?? classDef.weapon,
     weaponId: weapon?.id ?? DEFAULT_WEAPON_IDS[classKey],
     skills,
-    critBuffTurnsLeft: 0,
-    critBuffExpiresOnTurn: null,
+    warCryBuffExpiresOnTurn: null,
     hasDodgeBuff: false,
     hasBlockBuff: false,
     blockReductionNext: null,
@@ -1452,7 +1528,7 @@ function useGameEngine() {
     const p = playerRef.current;
     const foe = enemyRef.current;
     if (!p || !foe || !autoEnabled) return false;
-    const template = ENEMIES[foe.poolIndex ?? 0];
+    const template = getEnemyTemplateForFoe(foe);
     if (wouldAutoLose(p, foe, template, GAME_CONFIG.blockReduction)) {
       setAutoPaused(true);
       addLogEntry(t("battle.autoSlowing"), "system");
@@ -1476,7 +1552,7 @@ function useGameEngine() {
 
     const p = playerRef.current;
     if (!p) return;
-    const template = ENEMIES[enemyRef.current?.poolIndex ?? 0];
+    const template = getEnemyTemplateForFoe(enemyRef.current);
     const hpLow = p.maxHp > 0 && p.hp / p.maxHp <= 0.4;
     const shouldDefend =
       (hpLow ||
@@ -1528,8 +1604,16 @@ function useGameEngine() {
     nextEnemy = consumeAfterburnOnEnemy(nextEnemy);
     setEnemy(nextEnemy);
 
-    const poolIndex = getEnemyPoolIndex(nextRound, ENEMIES.length);
-    addLogEntry(`👁️ "${ENEMIES[poolIndex].lore}"`, "lore");
+    addLogEntry(`👁️ "${nextEnemy.lore}"`, "lore");
+    if (isThemeTransitionFloor(nextRound)) {
+      const block = getThemeBlock(nextRound);
+      if (block?.nameKey) {
+        addLogEntry(t(block.nameKey), "lore");
+      }
+    }
+    if (isFreePlayRound(nextRound) && nextRound === FREE_PLAY_START) {
+      addLogEntry(t("theme.freeplay"), "system");
+    }
     const classKey = playerRef.current?.classKey;
     const showBossBanner =
       nextEnemy.isBoss &&
@@ -1559,19 +1643,18 @@ function useGameEngine() {
     const p = playerRef.current;
     if (
       p &&
-      p.critBuffExpiresOnTurn != null &&
-      battleTurnRef.current >= p.critBuffExpiresOnTurn
+      p.warCryBuffExpiresOnTurn != null &&
+      battleTurnRef.current >= p.warCryBuffExpiresOnTurn
     ) {
       commitPlayer({
         ...p,
-        critBuffTurnsLeft: 0,
-        critBuffExpiresOnTurn: null,
+        warCryBuffExpiresOnTurn: null,
       });
     }
 
-    const afterCrit = playerRef.current;
-    if (afterCrit?.classKey === "templar" && afterCrit.maxHp > 0) {
-      const heal = Math.max(1, Math.floor(afterCrit.maxHp * 0.08));
+    const afterWarCry = playerRef.current;
+    if (afterWarCry?.classKey === "templar" && afterWarCry.maxHp > 0) {
+      const heal = Math.max(1, Math.floor(afterWarCry.maxHp * 0.08));
       commitPlayer((pl) => {
         if (!pl) return pl;
         const hp = Math.min(pl.maxHp, pl.hp + heal);
@@ -1591,9 +1674,29 @@ function useGameEngine() {
       return;
     }
 
-    if (autoEnabled && !autoPaused) {
+    const manualBossBlock =
+      isBossRound(roundNum) &&
+      !(classKey && canAutoSkipBoss(saveRef.current, classKey, roundNum));
+
+    if (autoEnabled && !autoPaused && !manualBossBlock) {
       schedule(GAME_CONFIG.autoCommandDelay, runAutoCommand);
     }
+  }
+
+  function toggleAuto() {
+    if (autoEnabledRef.current || autoPausedRef.current) {
+      setAutoEnabled(false);
+      setAutoPaused(false);
+      autoEnabledRef.current = false;
+      autoPausedRef.current = false;
+      clearAllTimers();
+      return;
+    }
+    setAutoEnabled(true);
+    setAutoPaused(false);
+    autoEnabledRef.current = true;
+    autoPausedRef.current = false;
+    resumeAutoAfterToggle();
   }
 
   function resumeAutoAfterToggle() {
@@ -1896,7 +1999,7 @@ function useGameEngine() {
         return;
       }
 
-      const template = ENEMIES[foe.poolIndex ?? 0];
+      const template = getEnemyTemplateForFoe(foe);
       const { rawAttackMult, specialName } = rollEnemySpecial(template);
       const rawAttack = Math.max(
         1,
@@ -1909,7 +2012,7 @@ function useGameEngine() {
       const live = playerRef.current;
       const dmgResult = calcDamageToPlayer(rawAttack, {
         hasBlockBuff: live?.hasBlockBuff,
-        defense: live?.defense ?? 0,
+        defense: getEffectiveDefense(live, battleTurnRef.current),
         blockReduction: GAME_CONFIG.blockReduction,
         blockReductionOverride: live?.blockReductionNext,
       });
@@ -2202,9 +2305,15 @@ function useGameEngine() {
     setTurn("player");
     setLog([
       { message: "⚔️ The boss rush begins. No mercy.", type: "system", id: 1 },
-      { message: `👁️ "${ENEMIES[0].lore}"`, type: "lore", id: 2 },
+      {
+        message: `👁️ "${buildEnemy(1).lore}"`,
+        type: "lore",
+        id: 2,
+      },
     ]);
     setScene("battle");
+    unlockAudio();
+    playThemeForRound(1);
   }
 
   function scaleFightDamageForClass(damage, p, foe) {
@@ -2218,40 +2327,26 @@ function useGameEngine() {
     return damage;
   }
 
-  function consumeCritBuffIfNeeded(crit) {
-    if (!crit) return;
-    commitPlayer((prev) =>
-      prev
-        ? {
-            ...prev,
-            critBuffTurnsLeft: Math.max(0, (prev.critBuffTurnsLeft ?? 0) - 1),
-          }
-        : prev
-    );
-  }
-
   function performFight() {
     const p = playerRef.current;
     const foe = enemyRef.current;
     if (!p || !foe) return;
 
-    const critActive =
-      (p.critBuffTurnsLeft ?? 0) > 0 &&
-      (p.critBuffExpiresOnTurn == null ||
-        battleTurnRef.current < p.critBuffExpiresOnTurn);
+    const battleTurn = battleTurnRef.current;
+    const atk = getEffectiveAttack(p, battleTurn);
+    const warCry = isWarCryBuffActive(p, battleTurn);
 
     if (p.classKey === "duelist") {
       const hit1 = rollFightDamage(
-        p.attack,
+        atk,
         GAME_CONFIG.attackVariance,
-        critActive,
+        false,
         GAME_CONFIG.critMultiplier
       );
-      consumeCritBuffIfNeeded(hit1.isCrit);
       const dmg1 = scaleFightDamageForClass(hit1.damage, p, foe);
       const hit2Raw = Math.max(
         1,
-        Math.round(p.attack * 1.5) +
+        Math.round(atk * 1.5) +
           randInt(-GAME_CONFIG.attackVariance, GAME_CONFIG.attackVariance)
       );
       const dmg2 = scaleFightDamageForClass(hit2Raw, p, foe);
@@ -2277,18 +2372,17 @@ function useGameEngine() {
     }
 
     const { damage: raw, isCrit: crit } = rollFightDamage(
-      p.attack,
+      atk,
       GAME_CONFIG.attackVariance,
-      critActive,
+      false,
       GAME_CONFIG.critMultiplier
     );
-    consumeCritBuffIfNeeded(crit);
     const damage = scaleFightDamageForClass(raw, p, foe);
-    const critText = crit ? " ⚡ CRITICAL!" : "";
+    const buffNote = warCry ? " 📯 War Cry!" : "";
     dealDamageToEnemy(
       damage,
       crit,
-      `⚔️ FIGHT! ${p.weapon} strikes ${foe.name} for ${damage}!${critText}`
+      `⚔️ FIGHT! ${p.weapon} strikes ${foe.name} for ${damage}!${buffNote}`
     );
   }
 
@@ -2367,15 +2461,13 @@ function useGameEngine() {
     if (!skill || skill.currentCooldown > 0) return;
     submitCommand(() => {
       const live = playerRef.current;
-      const liveSkill = live?.skills[skillIndex];
-      if (!live || !liveSkill) return;
-      setPlayer((prev) => ({
-        ...prev,
-        skills: prev.skills.map((s, i) =>
-          i === skillIndex ? { ...s, currentCooldown: s.cooldown } : s
-        ),
-      }));
-      executeSkill(liveSkill);
+      if (!live?.skills?.[skillIndex]) return;
+      if (live.skills[skillIndex].currentCooldown > 0) return;
+      const skills = applySkillCastCooldown(live.skills, skillIndex);
+      const next = { ...live, skills };
+      playerRef.current = next;
+      setPlayer(next);
+      executeSkill(next.skills[skillIndex]);
     });
   }
 
@@ -2394,10 +2486,12 @@ function useGameEngine() {
     const foe = enemyRef.current;
     const classKey = p?.classKey ?? "";
     const upgradeLevel = skill.upgradeLevel ?? 0;
+    const battleTurn = battleTurnRef.current;
+    const effectiveAtk = getEffectiveAttack(p, battleTurn);
     const skillDamage = (sk) =>
       isComboClassKey(classKey)
-        ? calcComboSkillDamage(sk, p?.attack ?? 1, upgradeLevel, classKey)
-        : calcSkillDamage(sk, p?.attack ?? 1, upgradeLevel);
+        ? calcComboSkillDamage(sk, effectiveAtk, upgradeLevel, classKey)
+        : calcSkillDamage(sk, effectiveAtk, upgradeLevel);
 
     switch (skill.type) {
       case "damage":
@@ -2500,17 +2594,22 @@ function useGameEngine() {
         break;
       }
 
-      case "buff_crit": {
-        const turns = GAME_CONFIG.critBuffTurns;
+      case "buff_war_cry": {
+        const turns = GAME_CONFIG.warCryBuffTurns;
+        const mult = GAME_CONFIG.warCryStatMult;
         addLogEntry(
-          t("battle.warCry", { icon: skill.icon, name: skill.name, turns }),
+          t("battle.warCry", {
+            icon: skill.icon,
+            name: skill.name,
+            turns,
+            mult: Math.round(mult * 100),
+          }),
           "good"
         );
-        spawnFloat(`⚡×${turns}`, "player", "#ff8c00");
+        spawnFloat(`📯×${turns}`, "player", "#ff8c00");
         commitPlayer((p) => ({
           ...p,
-          critBuffTurnsLeft: turns,
-          critBuffExpiresOnTurn: battleTurnRef.current + turns,
+          warCryBuffExpiresOnTurn: battleTurnRef.current + turns,
         }));
         setTurn("animating");
         schedule(GAME_CONFIG.actionToEnemyTurn, () => {
@@ -2758,6 +2857,7 @@ function useGameEngine() {
     setAutoPaused,
     setBattleSpeedIndex,
     resumeAutoAfterToggle,
+    toggleAuto,
     isBossRound: (r) => isBossRound(r ?? round),
   };
 }
@@ -3015,6 +3115,7 @@ function CombatantDisplay({
   maxHp,
   icon,
   spriteSrc,
+  spriteFlip,
   isPlayer,
   isDead,
   floats,
@@ -3046,7 +3147,15 @@ function CombatantDisplay({
       {!isPlayer && <HpBar current={hp} max={maxHp} isPlayer={false} />}
 
       {/* Character portrait */}
-      <div style={{ position: "relative", display: "inline-block", lineHeight: 1, margin: "6px 0" }}>
+      <div
+        style={{
+          position: "relative",
+          display: "inline-block",
+          lineHeight: 1,
+          margin: "6px 0",
+          transform: spriteFlip ? "scaleY(-1)" : "none",
+        }}
+      >
         <CharacterSprite
           src={spriteSrc}
           fallbackIcon={icon}
@@ -3066,9 +3175,9 @@ function CombatantDisplay({
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", fontSize: 9, color: nameColor }}>
           <span style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
             {name}
-            {(buffs?.critBuffTurnsLeft ?? 0) > 0 && (
+            {(buffs?.warCryTurnsLeft ?? 0) > 0 && (
               <span style={{ color: "#ff8c00", fontSize: 7 }}>
-                ⚡CRIT×{buffs.critBuffTurnsLeft}
+                📯ATK/DEF×{buffs.warCryTurnsLeft}
               </span>
             )}
             {buffs?.hasDodgeBuff && <span style={{ color: "#aaaaff", fontSize: 7 }}>💨EVADE</span>}
@@ -3130,6 +3239,8 @@ function BattleControlBar({
   battleSpeedIndex,
   onCycleSpeed,
   speedMultiplier,
+  musicMuted,
+  onToggleMusic,
 }) {
   const speedLabel = `${speedMultiplier}×`;
   const autoLabel = autoEnabled && !autoPaused
@@ -3174,6 +3285,24 @@ function BattleControlBar({
         }}
       >
         ⏩ {speedLabel}
+      </button>
+      <button
+        type="button"
+        onClick={onToggleMusic}
+        aria-label={musicMuted ? t("battle.musicOff") : t("battle.musicOn")}
+        style={{
+          minWidth: 48,
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 8,
+          padding: "8px 4px",
+          borderRadius: 5,
+          cursor: "pointer",
+          border: `2px solid ${musicMuted ? "#2a2a3a" : "#c8a96e"}`,
+          background: musicMuted ? "#0a0a14" : "#c8a96e22",
+          color: musicMuted ? COLORS.dimmed : COLORS.fight,
+        }}
+      >
+        {musicMuted ? "🔇" : "♪"}
       </button>
     </div>
   );
@@ -3371,7 +3500,11 @@ function BattleHUD({
         }}
       >
         <div>{t("battle.turn", { turn: battleTurn })}</div>
-        <div>FLOOR {round}/{SHOP_CONFIG.maxFloorLabel}</div>
+        <div>
+          {isFreePlayRound(round)
+            ? `FLOOR ${round} · ${t("theme.freeplay")}`
+            : `FLOOR ${round}/${SHOP_CONFIG.maxFloorLabel}`}
+        </div>
         {bestRound > 0 && (
           <div style={{ color: "#665544", fontSize: 6 }}>BEST {bestRound}</div>
         )}
@@ -4055,7 +4188,7 @@ function GameOverScreen({
   );
 }
 
-function BattleScene({ game }) {
+function BattleScene({ game, musicMuted, onToggleMusic }) {
   const {
     player,
     enemy,
@@ -4071,8 +4204,8 @@ function BattleScene({ game }) {
     battleTurn,
     autoEnabled, autoPaused, battleSpeedMultiplier, battleSpeedIndex,
     allTimeRecords,
-    setIsSkillsMenuOpen, setAutoEnabled, setAutoPaused, setBattleSpeedIndex,
-    resumeAutoAfterToggle,
+    setIsSkillsMenuOpen, setBattleSpeedIndex,
+    toggleAuto,
     isBossRound,
     canAutoSkipBoss,
   } = game;
@@ -4137,6 +4270,16 @@ function BattleScene({ game }) {
             hp={enemy.hp}
             maxHp={enemy.maxHp}
             icon={enemy.icon}
+            spriteSrc={getEnemyCombatSpriteUrl(
+              enemy,
+              getEnemyCombatSpriteState(
+                enemy.hp,
+                enemy.maxHp,
+                player?.attack ?? 0,
+                enemy
+              )
+            )}
+            spriteFlip={enemy.flipSprite}
             isPlayer={false}
             isDead={enemy.hp <= 0}
             floats={enemyFloats}
@@ -4181,7 +4324,7 @@ function BattleScene({ game }) {
             floats={playerFloats}
             shaking={shakeTarget === "player"}
             buffs={{
-              critBuffTurnsLeft: player.critBuffTurnsLeft,
+              warCryTurnsLeft: getWarCryBuffTurnsLeft(player, battleTurn),
               hasDodgeBuff: player.hasDodgeBuff,
               hasBlockBuff: player.hasBlockBuff,
               enemyFrozen,
@@ -4209,20 +4352,9 @@ function BattleScene({ game }) {
         autoPaused={autoPaused}
         speedMultiplier={battleSpeedMultiplier}
         battleSpeedIndex={battleSpeedIndex}
-        onToggleAuto={() => {
-          if (autoEnabled && !autoPaused) {
-            setAutoEnabled(false);
-            setAutoPaused(false);
-          } else if (autoPaused) {
-            setAutoPaused(false);
-            setAutoEnabled(true);
-            resumeAutoAfterToggle();
-          } else {
-            setAutoEnabled(true);
-            setAutoPaused(false);
-            resumeAutoAfterToggle();
-          }
-        }}
+        onToggleAuto={toggleAuto}
+        musicMuted={musicMuted}
+        onToggleMusic={onToggleMusic}
         onCycleSpeed={() => {
           setBattleSpeedIndex(
             (i) => (i + 1) % GAME_CONFIG.battleSpeedOptions.length
@@ -4267,7 +4399,10 @@ export default function BossRush() {
 
       {game.scene === "title" && (
         <TitleScreen
-          onStart={() => game.setScene("select")}
+          onStart={() => {
+            unlockAudio();
+            game.setScene("select");
+          }}
           wallet={game.wallet}
           allTimeRecords={game.allTimeRecords}
           locale={game.locale}
@@ -4301,7 +4436,11 @@ export default function BossRush() {
       )}
 
       {game.scene === "battle" && (
-        <BattleScene game={game} />
+        <BattleScene
+          game={game}
+          musicMuted={musicMuted}
+          onToggleMusic={toggleMusic}
+        />
       )}
 
       {game.scene === "gameover" && (
