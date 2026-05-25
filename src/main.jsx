@@ -8,9 +8,7 @@ import "./mobile.css";
 const updateSW = registerSW({
   immediate: true,
   onNeedRefresh() {
-    if (typeof window !== "undefined" && window.confirm("Boss Rush updated. Reload now?")) {
-      updateSW(true);
-    }
+    updateSW(true);
   },
 });
 

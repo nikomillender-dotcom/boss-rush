@@ -6,6 +6,8 @@
 
 Install as PWA on iPhone/Android (Add to Home Screen) for full-screen play.
 
+After a deploy, check the title-screen build stamp (`v1.0.0 · abc1234`) or reinstall the PWA if enemies still show emoji while cats show sprites — see [AGENTS.md](../AGENTS.md#dog-sprites-not-showing-on-phone-emoji-instead).
+
 ## Hook (one line)
 
 Endless turn-based **cat vs wacky dog** gauntlet — ten themed 100-floor arcs, camp meta, streak coins, and free play past floor 1000.

@@ -1,3 +1,5 @@
+/* global __APP_VERSION__, __BUILD_ID__ */
+
 /**
  * ⚔️ BOSS RUSH — A turn-based RPG gauntlet
  *
@@ -3072,13 +3074,22 @@ function HpBar({ current, max, isPlayer }) {
   );
 }
 
+const SPRITE_DEBUG =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("debugSprites");
+
 /** Pixel sprite with emoji fallback when PNG missing */
-function CharacterSprite({ src, fallbackIcon, size, dead }) {
+function CharacterSprite({ src, fallbackIcon, size, dead, debugLabel }) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     setFailed(false);
   }, [src]);
+
+  useEffect(() => {
+    if (!SPRITE_DEBUG || !debugLabel) return;
+    console.info("[sprite]", debugLabel, { src, failed });
+  }, [src, failed, debugLabel]);
 
   if (!src || failed) {
     return (
@@ -3101,7 +3112,12 @@ function CharacterSprite({ src, fallbackIcon, size, dead }) {
       alt=""
       width={size}
       height={size}
-      onError={() => setFailed(true)}
+      onError={() => {
+        if (SPRITE_DEBUG && debugLabel) {
+          console.warn("[sprite] load failed", debugLabel, src);
+        }
+        setFailed(true);
+      }}
       style={{
         display: "block",
         imageRendering: "pixelated",
@@ -3165,6 +3181,7 @@ function CombatantDisplay({
           fallbackIcon={icon}
           size={portraitSize}
           dead={isDead}
+          debugLabel={SPRITE_DEBUG ? (isPlayer ? "player" : "enemy") : undefined}
         />
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" }}>
           {floats.map((f) => (
@@ -3625,6 +3642,10 @@ function TitleScreen({ onStart, wallet, allTimeRecords, locale, onLocaleChange }
       >
         {t("title.start")}
       </button>
+
+      <div style={{ fontSize: 6, color: "#333", letterSpacing: 0.5 }}>
+        v{__APP_VERSION__} · {__BUILD_ID__}
+      </div>
     </div>
   );
 }
