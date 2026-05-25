@@ -11,12 +11,11 @@ Vite serves `public/` at `/sprites/cats/...`.
 | `combat_alert.png` | 96×96 | Back | Tough fight |
 | `combat_hurt.png` | 96×96 | Back | Low HP |
 
-Folders: `warrior/`, `mage/`, `rogue/`, `mage_knight/`
+Folders: `warrior/`, `mage/`, `rogue/`, `cleric/`, and each combo (`mage_knight/`, `sage/`, `templar/`, `duelist/`, `arcanist/`, `plaguecat/`).
 
 ## Regenerate
 
-1. Put your mage front reference at `tools/reference/mage-cat-reference.png` (optional; mage box uses it).
-2. From repo root:
+1. From repo root:
 
 ```bash
 npm install

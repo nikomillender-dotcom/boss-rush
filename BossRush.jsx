@@ -123,6 +123,78 @@ const COMBO_CLASS_KEYS = [
 
 const COMBO_UNLOCK_FLOOR = BATTLE_SCALING.comboUnlockFloor ?? BATTLE_SCALING.mageKnightUnlockFloor;
 
+const BASE_CLASS_UNLOCK_FLOOR = {
+  warrior: 0,
+  mage: 5,
+  rogue: 20,
+  cleric: 50,
+};
+
+const COMBO_SIGNATURE_SKILLS = {
+  mage_knight: {
+    id: "light",
+    name: "Light",
+    icon: "✨",
+    description: "2.75× burst and full heal. Long cooldown.",
+    cooldown: 9,
+    type: "combo_light",
+    multiplier: 2.75,
+  },
+  sage: {
+    id: "bio",
+    name: "Bio",
+    icon: "🧬",
+    description: "Strong hit and poison (3 turns).",
+    cooldown: 5,
+    type: "combo_bio",
+    multiplier: 1.5,
+    poisonTurns: 3,
+    poisonPct: 0.3334,
+  },
+  templar: {
+    id: "poison_shield",
+    name: "Poison Shield",
+    icon: "☠️🛡️",
+    description: "Block next hit; poison foe on contact.",
+    cooldown: 6,
+    type: "combo_poison_shield",
+    healAmount: 2,
+    blockReduction: 0.4,
+    poisonTurns: 3,
+    poisonPct: 0.3334,
+  },
+  duelist: {
+    id: "flurry_burst",
+    name: "Flurry Burst",
+    icon: "💢",
+    description: "Huge damage; all skills +2 CD.",
+    cooldown: 7,
+    type: "combo_nuke_punish",
+    multiplier: 3,
+    punishCooldown: 2,
+  },
+  arcanist: {
+    id: "dark_magic",
+    name: "Dark Magic",
+    icon: "🌑",
+    description: "Massive nuke; all skills +2 CD.",
+    cooldown: 8,
+    type: "combo_dark_nuke",
+    multiplier: 3.5,
+    punishCooldown: 2,
+  },
+  plaguecat: {
+    id: "toxic_smoke",
+    name: "Toxic Smoke",
+    icon: "💨☠️",
+    description: "Evade next hit and poison the foe.",
+    cooldown: 5,
+    type: "combo_toxic_smoke",
+    poisonTurns: 3,
+    poisonPct: 0.3334,
+  },
+};
+
 /** Dual-class definitions: parents, save unlock key, starter weapon id. */
 const COMBO_CLASSES = {
   mage_knight: {
@@ -189,10 +261,38 @@ function getComboDef(classKey) {
 
 function spriteKeyForClass(classKey) {
   if (CLASS_SPRITES[classKey]) return classKey;
-  if (classKey === "cleric") return "mage";
-  const combo = getComboDef(classKey);
-  if (combo) return combo.parents[0];
-  return "warrior";
+  return classKey;
+}
+
+function getShopMaxBoost(classKey) {
+  return isComboClassKey(classKey)
+    ? SCALING_CONFIG.comboShopMaxBoost
+    : SCALING_CONFIG.shopMaxBoost;
+}
+
+function getShopMaxSkillLevel(classKey) {
+  return isComboClassKey(classKey)
+    ? SCALING_CONFIG.comboMaxSkillLevel
+    : SCALING_CONFIG.maxSkillLevel;
+}
+
+function getAccountBestFloor(save) {
+  let best = Math.max(0, Number(save?.records?.rounds) || 0);
+  for (const key of CLASS_KEYS) {
+    best = Math.max(best, save?.classes?.[key]?.bestFloorReached ?? 0);
+  }
+  return best;
+}
+
+function isBaseClassUnlocked(save, classKey) {
+  const need = BASE_CLASS_UNLOCK_FLOOR[classKey] ?? 0;
+  return getAccountBestFloor(save) >= need;
+}
+
+function baseClassUnlockHint(classKey) {
+  const need = BASE_CLASS_UNLOCK_FLOOR[classKey] ?? 0;
+  if (need <= 0) return "";
+  return t("select.classUnlock", { floor: need, name: getLocalizedClass(classKey).name });
 }
 
 const SHOP_CONFIG = {
@@ -562,7 +662,10 @@ const CLASSES = {
   },
 };
 
-const SPRITE_CLASS_KEYS = ["warrior", "mage", "rogue", "cleric", "mage_knight"];
+const SPRITE_CLASS_KEYS = [
+  ...CLASS_KEYS,
+  ...COMBO_CLASS_KEYS,
+];
 
 function catSpritePath(classKey, filename) {
   return `/sprites/cats/${classKey}/${filename}`;
@@ -650,12 +753,16 @@ function createDefaultClassMeta(classKey) {
 function createDefaultComboMeta(comboKey) {
   const def = getComboDef(comboKey);
   const starter = def?.defaultWeaponId ?? DEFAULT_WEAPON_IDS[comboKey];
+  const skillLevels = {};
+  for (const skill of getComboSkillBases(comboKey)) {
+    skillLevels[skill.id] = 0;
+  }
   return {
     hpBoost: 0,
     atkBoost: 0,
     defBoost: 0,
     spBoost: 0,
-    skillLevels: {},
+    skillLevels,
     equippedWeaponId: starter,
     ownedWeaponIds: starter ? [starter] : [],
     bossesDefeated: [],
@@ -670,9 +777,36 @@ function ensureComboMeta(save, comboKey) {
   return save.classes[comboKey];
 }
 
+function ensureClassMeta(save, classKey) {
+  if (!save.classes[classKey]) {
+    save.classes[classKey] = createDefaultClassMeta(classKey);
+  }
+  return save.classes[classKey];
+}
+
+function mergeMissingClassMetas(save) {
+  let next = save;
+  let changed = false;
+  const classes = { ...save.classes };
+  for (const key of CLASS_KEYS) {
+    if (!classes[key]) {
+      classes[key] = createDefaultClassMeta(key);
+      changed = true;
+    }
+  }
+  for (const comboKey of COMBO_CLASS_KEYS) {
+    if (!classes[comboKey]) {
+      classes[comboKey] = createDefaultComboMeta(comboKey);
+      changed = true;
+    }
+  }
+  if (changed) next = { ...save, classes };
+  return next;
+}
+
 function getClassMetaFromSave(save, classKey) {
   if (isComboClassKey(classKey)) return ensureComboMeta(save, classKey);
-  return save.classes[classKey];
+  return ensureClassMeta(save, classKey);
 }
 
 function shopPriceForClass(classKey, priceFn, level) {
@@ -746,24 +880,8 @@ function syncMageKnightUnlock(save) {
   return syncAllComboUnlocks(save);
 }
 
-function getSkillOwnerForCombo(save, comboKey, skillId) {
-  const def = getComboDef(comboKey);
-  if (!def) return null;
-  for (const parentKey of def.parents) {
-    if (CLASSES[parentKey]?.skills?.some((s) => s.id === skillId)) {
-      return parentKey;
-    }
-  }
-  return null;
-}
-
 function getSkillUpgradeLevel(save, classKey, skillId) {
-  if (isComboClassKey(classKey)) {
-    const owner = getSkillOwnerForCombo(save, classKey, skillId);
-    if (owner) return save.classes[owner]?.skillLevels[skillId] ?? 0;
-    return 0;
-  }
-  return save.classes[classKey]?.skillLevels[skillId] ?? 0;
+  return getClassMetaFromSave(save, classKey)?.skillLevels[skillId] ?? 0;
 }
 
 function cooldownFromLevel(baseCooldown, level) {
@@ -853,14 +971,18 @@ function loadSave() {
         const base = createDefaultComboMeta(comboKey);
         save.classes[comboKey] = {
           ...base,
-          hpBoost: clamp(Number(incoming.hpBoost) || 0, 0, SHOP_CONFIG.maxHpBoost),
-          atkBoost: clamp(Number(incoming.atkBoost) || 0, 0, SHOP_CONFIG.maxAtkBoost),
-          defBoost: clamp(Number(incoming.defBoost) || 0, 0, SHOP_CONFIG.maxDefBoost),
+          hpBoost: clamp(Number(incoming.hpBoost) || 0, 0, getShopMaxBoost(comboKey)),
+          atkBoost: clamp(Number(incoming.atkBoost) || 0, 0, getShopMaxBoost(comboKey)),
+          defBoost: clamp(Number(incoming.defBoost) || 0, 0, getShopMaxBoost(comboKey)),
           spBoost: clamp(Number(incoming.spBoost) || 0, 0, SHOP_CONFIG.maxSpBoost),
           equippedWeaponId: incoming.equippedWeaponId || base.equippedWeaponId,
           ownedWeaponIds: Array.isArray(incoming.ownedWeaponIds)
             ? [...new Set([...(base.equippedWeaponId ? [base.equippedWeaponId] : []), ...incoming.ownedWeaponIds])]
             : base.ownedWeaponIds,
+          skillLevels: {
+            ...base.skillLevels,
+            ...(incoming.skillLevels || {}),
+          },
           bossesDefeated: Array.isArray(incoming.bossesDefeated)
             ? incoming.bossesDefeated.map(Number).filter((n) => n > 0)
             : [],
@@ -868,7 +990,10 @@ function loadSave() {
         };
         save.classes[comboKey] = syncBossesDefeatedFromBestFloor(save.classes[comboKey]);
       }
-      return syncAllComboUnlocks(save);
+      const merged = mergeMissingClassMetas(save);
+      const synced = syncAllComboUnlocks(merged);
+      if (merged !== save) persistSave(synced);
+      return synced;
     }
   } catch {
     /* fall through to migration */
@@ -945,8 +1070,8 @@ function applySkillLevels(baseSkill, level, playerAttack = 5) {
   return skill;
 }
 
-function describeSkillUpgrade(baseSkill, nextLevel, previewAttack = 5) {
-  if (nextLevel > SHOP_CONFIG.maxSkillLevel) return "Max level";
+function describeSkillUpgrade(baseSkill, nextLevel, previewAttack = 5, classKey = "warrior") {
+  if (nextLevel > getShopMaxSkillLevel(classKey)) return "Max level";
   const preview = applySkillLevels(baseSkill, nextLevel, previewAttack);
   const parts = [];
   if (preview.previewDamage != null) {
@@ -1024,7 +1149,36 @@ function getPlayerCombatSpriteUrl(classKey, state) {
 function getComboSkillBases(comboKey) {
   const def = getComboDef(comboKey);
   if (!def) return [];
-  return def.parents.flatMap((parentKey) => CLASSES[parentKey].skills);
+  const parentSkills = def.parents.flatMap((parentKey) => CLASSES[parentKey].skills);
+  const signature = COMBO_SIGNATURE_SKILLS[comboKey];
+  return signature ? [...parentSkills, signature] : parentSkills;
+}
+
+function applyComboSkillModifiers(skill, classKey, playerAttack) {
+  if (!isComboClassKey(classKey)) return skill;
+  let next = { ...skill };
+  if (classKey === "mage_knight") {
+    next.cooldown = (next.cooldown ?? 1) + 1;
+    if (next.previewDamage != null) {
+      next.previewDamage = Math.max(1, Math.round(next.previewDamage * 1.25));
+    }
+  }
+  return next;
+}
+
+function calcComboSkillDamage(skill, playerAttack, level, classKey) {
+  let damage = calcSkillDamage(skill, playerAttack, level);
+  if (classKey === "mage_knight") {
+    damage = Math.max(1, Math.round(damage * 1.25));
+  }
+  return damage;
+}
+
+function bumpAllSkillCooldowns(skills, amount) {
+  return skills.map((s) => ({
+    ...s,
+    currentCooldown: (s.currentCooldown ?? 0) + amount,
+  }));
 }
 
 function comboParentLabel(comboKey) {
@@ -1044,7 +1198,7 @@ function buildEnemy(round) {
   return buildScaledEnemy(round, ENEMIES, GAME_CONFIG);
 }
 
-/** Innate prestige stats from both parent camps + combo weapon tier. */
+/** Innate stats: sum of parent class bases only (no parent camp boosts). */
 function getComboInnate(save, comboKey) {
   const def = getComboDef(comboKey);
   if (!def) return null;
@@ -1053,11 +1207,10 @@ function getComboInnate(save, comboKey) {
   let baseAtk = 0;
   let defense = 0;
   for (const parentKey of def.parents) {
-    const p = save.classes[parentKey];
     const pDef = CLASSES[parentKey];
-    maxHp += pDef.maxHp + totalHpBonus(p.hpBoost);
-    baseAtk += pDef.attack + totalAtkBonus(p.atkBoost);
-    defense += (pDef.baseDefense ?? 0) + totalDefBonus(p.defBoost);
+    maxHp += pDef.maxHp;
+    baseAtk += pDef.attack;
+    defense += pDef.baseDefense ?? 0;
   }
   const weapon =
     getWeaponById(comboMeta.equippedWeaponId) ||
@@ -1082,9 +1235,12 @@ function buildPlayer(classKey, classMeta, save = null) {
     const attack = innate.attack + totalAtkBonus(comboMeta.atkBoost);
     const skillBases = getComboSkillBases(classKey);
     const skills = skillBases.map((base) => {
-      const ownerKey = getSkillOwnerForCombo(save, classKey, base.id);
-      const level = ownerKey ? (save.classes[ownerKey].skillLevels[base.id] ?? 0) : 0;
-      return applySkillLevels(base, level, attack);
+      const level = comboMeta.skillLevels[base.id] ?? 0;
+      return applyComboSkillModifiers(
+        applySkillLevels(base, level, attack),
+        classKey,
+        attack
+      );
     });
     return {
       classKey,
@@ -1099,22 +1255,25 @@ function buildPlayer(classKey, classMeta, save = null) {
       weaponId: comboMeta.equippedWeaponId,
       skills,
       critBuffTurnsLeft: 0,
+      critBuffExpiresOnTurn: null,
       hasDodgeBuff: false,
       hasBlockBuff: false,
       blockReductionNext: null,
       hasReflectGuard: false,
+      hasPoisonShield: false,
     };
   }
 
   const classDef = CLASSES[classKey];
   const localized = getLocalizedClass(classKey);
-  const weapon = getWeaponById(classMeta.equippedWeaponId) || getWeaponById(DEFAULT_WEAPON_IDS[classKey]);
-  const maxHp = classDef.maxHp + totalHpBonus(classMeta.hpBoost);
-  const baseAtk = classDef.attack + totalAtkBonus(classMeta.atkBoost);
+  const meta = classMeta ?? createDefaultClassMeta(classKey);
+  const weapon = getWeaponById(meta.equippedWeaponId) || getWeaponById(DEFAULT_WEAPON_IDS[classKey]);
+  const maxHp = classDef.maxHp + totalHpBonus(meta.hpBoost);
+  const baseAtk = classDef.attack + totalAtkBonus(meta.atkBoost);
   const attack = Math.max(1, Math.round(baseAtk * getWeaponAttackMult(weapon)));
 
   const skills = classDef.skills.map((base) => {
-    const level = classMeta.skillLevels[base.id] ?? 0;
+    const level = meta.skillLevels[base.id] ?? 0;
     return applySkillLevels(base, level, attack);
   });
 
@@ -1126,15 +1285,17 @@ function buildPlayer(classKey, classMeta, save = null) {
     maxHp,
     attack,
     speed: classDef.speed ?? 5,
-    defense: (classDef.baseDefense ?? 0) + totalDefBonus(classMeta.defBoost ?? 0),
+    defense: (classDef.baseDefense ?? 0) + totalDefBonus(meta.defBoost ?? 0),
     weapon: weapon?.name ?? classDef.weapon,
     weaponId: weapon?.id ?? DEFAULT_WEAPON_IDS[classKey],
     skills,
     critBuffTurnsLeft: 0,
+    critBuffExpiresOnTurn: null,
     hasDodgeBuff: false,
     hasBlockBuff: false,
     blockReductionNext: null,
     hasReflectGuard: false,
+    hasPoisonShield: false,
   };
 }
 
@@ -1174,7 +1335,7 @@ function useGameEngine() {
   const [round, setRound] = useState(1);
   const [battleTurn, setBattleTurn] = useState(0);
   const [log, setLog] = useState([]);
-  const [isMagicMenuOpen, setIsMagicMenuOpen] = useState(false);
+  const [isSkillsMenuOpen, setIsSkillsMenuOpen] = useState(false);
   const [enemyFrozen, setEnemyFrozen] = useState(false);
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoPaused, setAutoPaused] = useState(false);
@@ -1394,6 +1555,31 @@ function useGameEngine() {
       battleTurnRef.current = next;
       return next;
     });
+
+    const p = playerRef.current;
+    if (
+      p &&
+      p.critBuffExpiresOnTurn != null &&
+      battleTurnRef.current >= p.critBuffExpiresOnTurn
+    ) {
+      commitPlayer({
+        ...p,
+        critBuffTurnsLeft: 0,
+        critBuffExpiresOnTurn: null,
+      });
+    }
+
+    const afterCrit = playerRef.current;
+    if (afterCrit?.classKey === "templar" && afterCrit.maxHp > 0) {
+      const heal = Math.max(1, Math.floor(afterCrit.maxHp * 0.08));
+      commitPlayer((pl) => {
+        if (!pl) return pl;
+        const hp = Math.min(pl.maxHp, pl.hp + heal);
+        if (hp === pl.hp) return pl;
+        spawnFloat(`+${heal}`, "player", "#00ff99");
+        return { ...pl, hp };
+      });
+    }
 
     const classKey = playerRef.current?.classKey;
     const roundNum = roundRef.current;
@@ -1666,7 +1852,12 @@ function useGameEngine() {
 
       const poisonTurns = foe.poisonTurnsLeft ?? 0;
       if (poisonTurns > 0) {
-        const tick = poisonTickDamage(foe.maxHp);
+        const stack = foe.poisonStack ?? 0;
+        const baseTick = poisonTickDamage(foe.maxHp);
+        const tick =
+          p.classKey === "sage" && foe.poisonCompound
+            ? Math.max(1, Math.ceil(baseTick * (1 + stack * 0.34)))
+            : baseTick;
         const hp = Math.max(0, foe.hp - tick);
         const poisonTurnsLeft = Math.max(0, poisonTurns - 1);
         addLogEntry(t("battle.poisonTick", { damage: tick, name: foe.name }), "good");
@@ -1675,6 +1866,7 @@ function useGameEngine() {
           ...foe,
           hp,
           poisonTurnsLeft: poisonTurnsLeft > 0 ? poisonTurnsLeft : 0,
+          poisonStack: p.classKey === "sage" && foe.poisonCompound ? stack + 1 : stack,
         };
         setEnemy(foe);
         if (hp <= 0) {
@@ -1772,12 +1964,26 @@ function useGameEngine() {
       triggerShake("player");
       triggerFlash("red");
 
+      if (live?.hasPoisonShield && dmgResult.wasBlocked) {
+        setEnemy((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            poisonTurnsLeft: 3,
+            poisonPct: 0.3334,
+            poisonStack: 0,
+          };
+        });
+        addLogEntry(t("battle.poisonShieldProc", { name: foe.name }), "good");
+      }
+
       const newHp = Math.max(0, (live?.hp ?? p.hp) - damage);
       commitPlayer({
         ...(live ?? p),
         hp: newHp,
         hasBlockBuff: false,
         blockReductionNext: null,
+        hasPoisonShield: false,
         skills: tickCooldowns((live ?? p).skills),
       });
 
@@ -1850,7 +2056,7 @@ function useGameEngine() {
     const foe = enemyRef.current;
     if (!p || !foe) return;
 
-    setIsMagicMenuOpen(false);
+    setIsSkillsMenuOpen(false);
     playerActionFn();
   }
 
@@ -1869,10 +2075,18 @@ function useGameEngine() {
   // ── Camp / shop ──
 
   function selectClass(classKey) {
+    if (!isComboClassKey(classKey) && !isBaseClassUnlocked(saveRef.current, classKey)) {
+      return;
+    }
     if (isComboClassKey(classKey)) {
+      if (!isComboUnlockedBySave(saveRef.current, classKey)) return;
       const next = { ...saveRef.current };
       ensureComboMeta(next, classKey);
       commitSave(next);
+    } else {
+      const next = mergeMissingClassMetas(saveRef.current);
+      ensureClassMeta(next, classKey);
+      if (next !== saveRef.current) commitSave(next);
     }
     setSelectedClassKey(classKey);
     setScene("shop");
@@ -1895,7 +2109,8 @@ function useGameEngine() {
     const key = selectedClassKey;
     if (!key) return;
     const meta = getClassMetaFromSave(saveRef.current, key);
-    if (meta.hpBoost >= SHOP_CONFIG.maxHpBoost) return;
+    const maxHp = getShopMaxBoost(key);
+    if (meta.hpBoost >= maxHp) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.hpPrice, meta.hpBoost);
     if (!spendWallet(price)) return;
     patchClassMeta(key, { hpBoost: meta.hpBoost + 1 });
@@ -1905,7 +2120,8 @@ function useGameEngine() {
     const key = selectedClassKey;
     if (!key) return;
     const meta = getClassMetaFromSave(saveRef.current, key);
-    if (meta.atkBoost >= SHOP_CONFIG.maxAtkBoost) return;
+    const maxAtk = getShopMaxBoost(key);
+    if (meta.atkBoost >= maxAtk) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.atkPrice, meta.atkBoost);
     if (!spendWallet(price)) return;
     patchClassMeta(key, { atkBoost: meta.atkBoost + 1 });
@@ -1915,7 +2131,8 @@ function useGameEngine() {
     const key = selectedClassKey;
     if (!key) return;
     const meta = getClassMetaFromSave(saveRef.current, key);
-    if (meta.defBoost >= SHOP_CONFIG.maxDefBoost) return;
+    const maxDef = getShopMaxBoost(key);
+    if (meta.defBoost >= maxDef) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.defPrice, meta.defBoost);
     if (!spendWallet(price)) return;
     patchClassMeta(key, { defBoost: meta.defBoost + 1 });
@@ -1943,16 +2160,13 @@ function useGameEngine() {
   function buySkillUpgrade(skillId) {
     const key = selectedClassKey;
     if (!key) return;
-    let ownerKey = key;
-    if (isComboClassKey(key)) {
-      ownerKey = getSkillOwnerForCombo(saveRef.current, key, skillId) ?? key;
-    }
-    const meta = getClassMetaFromSave(saveRef.current, ownerKey);
+    const meta = getClassMetaFromSave(saveRef.current, key);
     const level = meta.skillLevels[skillId] ?? 0;
-    if (level >= SHOP_CONFIG.maxSkillLevel) return;
+    const maxLv = getShopMaxSkillLevel(key);
+    if (level >= maxLv) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.skillPrice, level);
     if (!spendWallet(price)) return;
-    patchClassMeta(ownerKey, {
+    patchClassMeta(key, {
       skillLevels: { ...meta.skillLevels, [skillId]: level + 1 },
     });
   }
@@ -1966,9 +2180,11 @@ function useGameEngine() {
     if (isComboClassKey(classKey)) {
       ensureComboMeta(saveRef.current, classKey);
     }
-    const playerState = isComboClassKey(classKey)
-      ? buildPlayer(classKey, getClassMetaFromSave(saveRef.current, classKey), saveRef.current)
-      : buildPlayer(classKey, saveRef.current.classes[classKey], saveRef.current);
+    const playerState = buildPlayer(
+      classKey,
+      getClassMetaFromSave(saveRef.current, classKey),
+      saveRef.current
+    );
     setPlayer(playerState);
     setEnemy(buildEnemy(1));
     setRunCoinsEarned(0);
@@ -1977,7 +2193,7 @@ function useGameEngine() {
     setKills(0);
     setRound(1);
     setEnemyFrozen(false);
-    setIsMagicMenuOpen(false);
+    setIsSkillsMenuOpen(false);
     setAutoEnabled(false);
     setAutoPaused(false);
     setBattleSpeedIndex(0);
@@ -1991,30 +2207,83 @@ function useGameEngine() {
     setScene("battle");
   }
 
+  function scaleFightDamageForClass(damage, p, foe) {
+    if (!p || !foe) return damage;
+    if (p.classKey === "arcanist" && foe.hp < foe.maxHp) {
+      return Math.max(1, Math.round(damage * 1.33));
+    }
+    if (p.classKey === "plaguecat" && (foe.poisonTurnsLeft ?? 0) > 0) {
+      return Math.max(1, Math.round(damage * 2));
+    }
+    return damage;
+  }
+
+  function consumeCritBuffIfNeeded(crit) {
+    if (!crit) return;
+    commitPlayer((prev) =>
+      prev
+        ? {
+            ...prev,
+            critBuffTurnsLeft: Math.max(0, (prev.critBuffTurnsLeft ?? 0) - 1),
+          }
+        : prev
+    );
+  }
+
   function performFight() {
     const p = playerRef.current;
     const foe = enemyRef.current;
     if (!p || !foe) return;
 
-    const isCrit = (p.critBuffTurnsLeft ?? 0) > 0;
-    const { damage, isCrit: crit } = rollFightDamage(
-      p.attack,
-      GAME_CONFIG.attackVariance,
-      isCrit,
-      GAME_CONFIG.critMultiplier
-    );
+    const critActive =
+      (p.critBuffTurnsLeft ?? 0) > 0 &&
+      (p.critBuffExpiresOnTurn == null ||
+        battleTurnRef.current < p.critBuffExpiresOnTurn);
 
-    if (crit) {
-      commitPlayer((prev) =>
-        prev
-          ? {
-              ...prev,
-              critBuffTurnsLeft: Math.max(0, (prev.critBuffTurnsLeft ?? 0) - 1),
-            }
-          : prev
+    if (p.classKey === "duelist") {
+      const hit1 = rollFightDamage(
+        p.attack,
+        GAME_CONFIG.attackVariance,
+        critActive,
+        GAME_CONFIG.critMultiplier
       );
+      consumeCritBuffIfNeeded(hit1.isCrit);
+      const dmg1 = scaleFightDamageForClass(hit1.damage, p, foe);
+      const hit2Raw = Math.max(
+        1,
+        Math.round(p.attack * 1.5) +
+          randInt(-GAME_CONFIG.attackVariance, GAME_CONFIG.attackVariance)
+      );
+      const dmg2 = scaleFightDamageForClass(hit2Raw, p, foe);
+      addLogEntry(
+        `⚔️ FIGHT! ${p.weapon} strikes ${foe.name} for ${dmg1}, then ${dmg2}!`,
+        "good"
+      );
+      spawnFloat(`−${dmg1}`, "enemy", hit1.isCrit ? "#ff8c00" : "#FFD700");
+      triggerShake("enemy");
+      resolveEnemyDamage(dmg1, () => {
+        const current = enemyRef.current;
+        if (!current || current.hp <= 0) return;
+        spawnFloat(`−${dmg2}`, "enemy", "#FFD700");
+        triggerShake("enemy");
+        dealDamageToEnemy(
+          dmg2,
+          false,
+          `⚔️ Second strike — ${dmg2} damage!`,
+          null
+        );
+      });
+      return;
     }
 
+    const { damage: raw, isCrit: crit } = rollFightDamage(
+      p.attack,
+      GAME_CONFIG.attackVariance,
+      critActive,
+      GAME_CONFIG.critMultiplier
+    );
+    consumeCritBuffIfNeeded(crit);
+    const damage = scaleFightDamageForClass(raw, p, foe);
     const critText = crit ? " ⚡ CRITICAL!" : "";
     dealDamageToEnemy(
       damage,
@@ -2030,7 +2299,7 @@ function useGameEngine() {
 
   function actionDefend() {
     if (turn !== "player") return;
-    setIsMagicMenuOpen(false);
+    setIsSkillsMenuOpen(false);
     submitCommand(() => {
       const p = playerRef.current;
       if (!p) return;
@@ -2047,7 +2316,7 @@ function useGameEngine() {
 
   function actionRetreat() {
     if (turn !== "player") return;
-    setIsMagicMenuOpen(false);
+    setIsSkillsMenuOpen(false);
 
     if (isBossRound(roundRef.current)) {
       addLogEntry("☠️ Cannot RUN from a boss fight!", "bad");
@@ -2082,7 +2351,7 @@ function useGameEngine() {
     setEnemy(null);
     setEnemyFrozen(false);
     setTurn("player");
-    setIsMagicMenuOpen(false);
+    setIsSkillsMenuOpen(false);
     setLog([]);
     setBattleTurn(0);
     battleTurnRef.current = 0;
@@ -2110,9 +2379,9 @@ function useGameEngine() {
     });
   }
 
-  function openMagicMenu() {
+  function openSkillsMenu() {
     if (turn !== "player") return;
-    setIsMagicMenuOpen(true);
+    setIsSkillsMenuOpen(true);
   }
 
   /**
@@ -2123,22 +2392,30 @@ function useGameEngine() {
   function executeSkill(skill) {
     const p = playerRef.current;
     const foe = enemyRef.current;
-
+    const classKey = p?.classKey ?? "";
     const upgradeLevel = skill.upgradeLevel ?? 0;
+    const skillDamage = (sk) =>
+      isComboClassKey(classKey)
+        ? calcComboSkillDamage(sk, p?.attack ?? 1, upgradeLevel, classKey)
+        : calcSkillDamage(sk, p?.attack ?? 1, upgradeLevel);
 
     switch (skill.type) {
       case "damage":
       case "damage_afterburn": {
-        let damage = calcSkillDamage(skill, p?.attack ?? 1, upgradeLevel);
+        let damage = skillDamage(skill);
         let meltNote = "";
         if (skill.type === "damage_afterburn") {
           if (meltFreezeOnEnemy()) {
             damage = Math.max(1, Math.round(damage * GAME_CONFIG.fireMeltBonus));
             meltNote = ` ${t("battle.fireMelt")}`;
           }
+          let carriers = afterburnCarriers(upgradeLevel);
+          if (classKey === "sage") {
+            carriers = Math.max(2, carriers + 1);
+          }
           afterburnRef.current = {
             skillLevel: upgradeLevel,
-            carriersLeft: afterburnCarriers(upgradeLevel),
+            carriersLeft: carriers,
           };
         }
         const afterburnNote =
@@ -2152,8 +2429,8 @@ function useGameEngine() {
       }
 
       case "damage_freeze": {
-        const damage = calcSkillDamage(skill, p?.attack ?? 1, upgradeLevel);
-        const freezeTurns = randInt(1, 3);
+        const damage = skillDamage(skill);
+        const freezeTurns = classKey === "sage" ? randInt(2, 4) : randInt(1, 3);
         setEnemy((prev) => {
           if (!prev) return prev;
           return {
@@ -2181,7 +2458,7 @@ function useGameEngine() {
       }
 
       case "damage_steal": {
-        const damage = calcSkillDamage(skill, p?.attack ?? 1, upgradeLevel);
+        const damage = skillDamage(skill);
         const stolen = randInt(...skill.stealRange);
         addLogEntry(`${skill.icon} ${skill.name}! ${damage} damage + stole ${stolen} coins!`, "good");
         spawnFloat(`−${damage}`, "enemy", "#FFD700");
@@ -2230,7 +2507,11 @@ function useGameEngine() {
           "good"
         );
         spawnFloat(`⚡×${turns}`, "player", "#ff8c00");
-        commitPlayer((p) => ({ ...p, critBuffTurnsLeft: turns }));
+        commitPlayer((p) => ({
+          ...p,
+          critBuffTurnsLeft: turns,
+          critBuffExpiresOnTurn: battleTurnRef.current + turns,
+        }));
         setTurn("animating");
         schedule(GAME_CONFIG.actionToEnemyTurn, () => {
           setTurn("enemy");
@@ -2250,7 +2531,7 @@ function useGameEngine() {
       case "apply_poison": {
         const chip =
           skill.damageBase != null || skill.attackScale != null
-            ? calcSkillDamage(skill, p?.attack ?? 1, upgradeLevel)
+            ? skillDamage(skill)
             : 0;
         const poisonTurns = skill.poisonTurns ?? 3;
         const poisonPct = skill.poisonPct ?? 0.3334;
@@ -2262,6 +2543,8 @@ function useGameEngine() {
             hp,
             poisonTurnsLeft: poisonTurns,
             poisonPct,
+            poisonCompound: classKey === "sage",
+            poisonStack: 0,
           };
         });
         addLogEntry(
@@ -2295,8 +2578,99 @@ function useGameEngine() {
         break;
       }
 
+      case "combo_light": {
+        const damage = skillDamage(skill);
+        commitPlayer((pl) => ({ ...pl, hp: pl.maxHp }));
+        spawnFloat("FULL HP", "player", "#00ff99");
+        dealDamageToEnemy(
+          damage,
+          false,
+          `${skill.icon} ${skill.name}! ${damage} damage — fully healed!`
+        );
+        break;
+      }
+
+      case "combo_bio": {
+        const damage = skillDamage(skill);
+        const poisonTurns = skill.poisonTurns ?? 3;
+        setEnemy((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            hp: Math.max(0, prev.hp - damage),
+            poisonTurnsLeft: poisonTurns,
+            poisonPct: skill.poisonPct ?? 0.3334,
+            poisonCompound: true,
+            poisonStack: 0,
+          };
+        });
+        addLogEntry(
+          `${skill.icon} ${skill.name}! ${damage} damage — ${foe?.name ?? "Enemy"} is poisoned.`,
+          "good"
+        );
+        spawnFloat(`☠️−${damage}`, "enemy", "#aa44ff");
+        triggerShake("enemy");
+        resolveEnemyDamage(damage);
+        break;
+      }
+
+      case "combo_poison_shield": {
+        const heal = skill.healAmount ?? 2;
+        addLogEntry(`${skill.icon} ${skill.name}! Bracing — poison ready on block!`, "good");
+        spawnFloat(`+${heal} HP`, "player", "#00ff99");
+        commitPlayer((pl) => ({
+          ...pl,
+          hp: Math.min(pl.maxHp, pl.hp + heal),
+          hasBlockBuff: true,
+          blockReductionNext: skill.blockReduction ?? GAME_CONFIG.blockReduction,
+          hasPoisonShield: true,
+        }));
+        setTurn("animating");
+        schedule(GAME_CONFIG.actionToEnemyTurn, () => {
+          setTurn("enemy");
+          processEnemyTurn();
+        });
+        break;
+      }
+
+      case "combo_nuke_punish":
+      case "combo_dark_nuke": {
+        const damage = skillDamage(skill);
+        const punish = skill.punishCooldown ?? 2;
+        dealDamageToEnemy(
+          damage,
+          false,
+          `${skill.icon} ${skill.name}! ${damage} devastation!`,
+          () => {
+            commitPlayer((pl) =>
+              pl ? { ...pl, skills: bumpAllSkillCooldowns(pl.skills, punish) } : pl
+            );
+          }
+        );
+        break;
+      }
+
+      case "combo_toxic_smoke": {
+        const poisonTurns = skill.poisonTurns ?? 3;
+        addLogEntry(`${skill.icon} ${skill.name}! Toxic veil — evade and poison!`, "good");
+        spawnFloat("💨☠️", "player", "#aa44ff");
+        commitPlayer((pl) => ({ ...pl, hasDodgeBuff: true }));
+        setEnemy((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            poisonTurnsLeft: poisonTurns,
+            poisonPct: skill.poisonPct ?? 0.3334,
+            poisonCompound: true,
+            poisonStack: 0,
+          };
+        });
+        scheduleAfterPlayerAction();
+        break;
+      }
+
       case "damage_lifesteal": {
-        const damage = calcSkillDamage(skill, p?.attack ?? 1, upgradeLevel);
+        const damage = skillDamage(skill);
         const ls =
           skill.lifestealPercent ?? lifestealPercent(upgradeLevel);
         dealDamageToEnemy(
@@ -2338,7 +2712,7 @@ function useGameEngine() {
     kills,
     round,
     log,
-    isMagicMenuOpen,
+    isSkillsMenuOpen,
     enemyFrozen,
     autoEnabled,
     autoPaused,
@@ -2378,8 +2752,8 @@ function useGameEngine() {
     actionDefend,
     actionRetreat,
     actionMagic,
-    openMagicMenu,
-    setIsMagicMenuOpen,
+    openSkillsMenu,
+    setIsSkillsMenuOpen,
     setAutoEnabled,
     setAutoPaused,
     setBattleSpeedIndex,
@@ -2709,10 +3083,10 @@ function CombatantDisplay({
 }
 
 /** FF1-style command grid */
-function ActionButtons({ isPlayerTurn, onFight, onMagic, onDefend, onRun, runDisabled }) {
+function ActionButtons({ isPlayerTurn, onFight, onSkills, onDefend, onRun, runDisabled }) {
   const buttons = [
     { label: t("battle.fight"), color: COLORS.fight, border: COLORS.fightBorder, action: onFight, disabled: false },
-    { label: t("battle.magic"), color: COLORS.skill, border: COLORS.skillBorder, action: onMagic, disabled: false },
+    { label: t("battle.skills"), color: COLORS.skill, border: COLORS.skillBorder, action: onSkills, disabled: false },
     { label: t("battle.defend"), color: COLORS.block, border: COLORS.blockBorder, action: onDefend, disabled: false },
     { label: t("battle.run"), color: COLORS.run, border: COLORS.runBorder, action: onRun, disabled: runDisabled },
   ];
@@ -2805,8 +3179,8 @@ function BattleControlBar({
   );
 }
 
-/** Magic selection menu (FF1 MAGIC command) */
-function MagicMenu({ skills, onSelectSkill, onClose }) {
+/** Skill selection menu */
+function SkillsMenu({ skills, onSelectSkill, onClose }) {
   return (
     <div
       style={{
@@ -2823,7 +3197,7 @@ function MagicMenu({ skills, onSelectSkill, onClose }) {
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ color: COLORS.skill, fontSize: 9, fontFamily: "'Press Start 2P', monospace" }}>
-          {t("battle.magicHeader")}
+          {t("battle.skillsHeader")}
         </span>
         <button
           onClick={onClose}
@@ -3175,6 +3549,8 @@ function ShopScreen({
   const weapons = getWeaponsForClass(classKey);
   const equippedId = classMeta?.equippedWeaponId;
   const priceMult = (base) => (isCombo ? comboShopPrice(base) : base);
+  const shopMaxBoost = getShopMaxBoost(classKey);
+  const shopMaxSkill = getShopMaxSkillLevel(classKey);
 
   const btnStyle = (enabled) => ({
     fontFamily: "'Press Start 2P', monospace",
@@ -3240,44 +3616,44 @@ function ShopScreen({
             <button
               type="button"
               disabled={
-                classMeta.hpBoost >= SHOP_CONFIG.maxHpBoost ||
+                classMeta.hpBoost >= shopMaxBoost ||
                 wallet < priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))
               }
               onClick={onBuyHp}
               style={btnStyle(
-                classMeta.hpBoost < SHOP_CONFIG.maxHpBoost &&
+                classMeta.hpBoost < shopMaxBoost &&
                   wallet >= priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))
               )}
             >
-              ❤️ Max HP +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{SHOP_CONFIG.maxHpBoost}) — {priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))}💰
+              ❤️ Max HP +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{shopMaxBoost}) — {priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))}💰
             </button>
             <button
               type="button"
               disabled={
-                classMeta.atkBoost >= SHOP_CONFIG.maxAtkBoost ||
+                classMeta.atkBoost >= shopMaxBoost ||
                 wallet < priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))
               }
               onClick={onBuyAtk}
               style={btnStyle(
-                classMeta.atkBoost < SHOP_CONFIG.maxAtkBoost &&
+                classMeta.atkBoost < shopMaxBoost &&
                   wallet >= priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))
               )}
             >
-              ⚔️ Attack +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{SHOP_CONFIG.maxAtkBoost}) — {priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))}💰
+              ⚔️ Attack +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{shopMaxBoost}) — {priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))}💰
             </button>
             <button
               type="button"
               disabled={
-                classMeta.defBoost >= SHOP_CONFIG.maxDefBoost ||
+                classMeta.defBoost >= shopMaxBoost ||
                 wallet < priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))
               }
               onClick={onBuyDef}
               style={btnStyle(
-                classMeta.defBoost < SHOP_CONFIG.maxDefBoost &&
+                classMeta.defBoost < shopMaxBoost &&
                   wallet >= priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))
               )}
             >
-              🛡️ Defense +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{SHOP_CONFIG.maxDefBoost}) — {priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))}💰
+              🛡️ Defense +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{shopMaxBoost}) — {priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))}💰
             </button>
           </ShopAccordion>
         </>
@@ -3288,36 +3664,36 @@ function ShopScreen({
           <ShopAccordion title="Permanent boosts">
             <button
               type="button"
-              disabled={classMeta.hpBoost >= SHOP_CONFIG.maxHpBoost || wallet < SHOP_CONFIG.hpPrice(classMeta.hpBoost)}
+              disabled={classMeta.hpBoost >= shopMaxBoost || wallet < SHOP_CONFIG.hpPrice(classMeta.hpBoost)}
               onClick={onBuyHp}
               style={btnStyle(
-                classMeta.hpBoost < SHOP_CONFIG.maxHpBoost &&
+                classMeta.hpBoost < shopMaxBoost &&
                   wallet >= SHOP_CONFIG.hpPrice(classMeta.hpBoost)
               )}
             >
-              ❤️ Max HP +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{SHOP_CONFIG.maxHpBoost}) — {SHOP_CONFIG.hpPrice(classMeta.hpBoost)}💰
+              ❤️ Max HP +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{shopMaxBoost}) — {SHOP_CONFIG.hpPrice(classMeta.hpBoost)}💰
             </button>
             <button
               type="button"
-              disabled={classMeta.atkBoost >= SHOP_CONFIG.maxAtkBoost || wallet < SHOP_CONFIG.atkPrice(classMeta.atkBoost)}
+              disabled={classMeta.atkBoost >= shopMaxBoost || wallet < SHOP_CONFIG.atkPrice(classMeta.atkBoost)}
               onClick={onBuyAtk}
               style={btnStyle(
-                classMeta.atkBoost < SHOP_CONFIG.maxAtkBoost &&
+                classMeta.atkBoost < shopMaxBoost &&
                   wallet >= SHOP_CONFIG.atkPrice(classMeta.atkBoost)
               )}
             >
-              ⚔️ Attack +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{SHOP_CONFIG.maxAtkBoost}) — {SHOP_CONFIG.atkPrice(classMeta.atkBoost)}💰
+              ⚔️ Attack +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{shopMaxBoost}) — {SHOP_CONFIG.atkPrice(classMeta.atkBoost)}💰
             </button>
             <button
               type="button"
-              disabled={classMeta.defBoost >= SHOP_CONFIG.maxDefBoost || wallet < SHOP_CONFIG.defPrice(classMeta.defBoost)}
+              disabled={classMeta.defBoost >= shopMaxBoost || wallet < SHOP_CONFIG.defPrice(classMeta.defBoost)}
               onClick={onBuyDef}
               style={btnStyle(
-                classMeta.defBoost < SHOP_CONFIG.maxDefBoost &&
+                classMeta.defBoost < shopMaxBoost &&
                   wallet >= SHOP_CONFIG.defPrice(classMeta.defBoost)
               )}
             >
-              🛡️ Defense +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{SHOP_CONFIG.maxDefBoost}) — {SHOP_CONFIG.defPrice(classMeta.defBoost)}💰
+              🛡️ Defense +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{shopMaxBoost}) — {SHOP_CONFIG.defPrice(classMeta.defBoost)}💰
             </button>
           </ShopAccordion>
         </>
@@ -3353,15 +3729,12 @@ function ShopScreen({
         <ShopAccordion title={t("shop.skillUpgrades")}>
           {skillBases.map((rawBase) => {
             const base = localizeSkillTemplate(rawBase);
-            const level = isCombo
-              ? getSkillUpgradeLevel(save, classKey, rawBase.id)
-              : (classMeta.skillLevels[rawBase.id] ?? 0);
-            const maxed = level >= SHOP_CONFIG.maxSkillLevel;
+            const level = classMeta.skillLevels[rawBase.id] ?? 0;
+            const maxed = level >= shopMaxSkill;
             const price = isCombo
               ? priceMult(SHOP_CONFIG.skillPrice(level))
               : SHOP_CONFIG.skillPrice(level);
             const canBuy = !maxed && wallet >= price;
-            const ownerKey = isCombo ? getSkillOwnerForCombo(save, classKey, rawBase.id) : null;
             return (
               <button
                 key={rawBase.id}
@@ -3370,13 +3743,10 @@ function ShopScreen({
                 onClick={() => onBuySkill(rawBase.id)}
                 style={btnStyle(canBuy)}
               >
-                {base.icon} {base.name} Lv.{level}/{SHOP_CONFIG.maxSkillLevel}
-                {ownerKey && (
-                  <span style={{ fontSize: 6, color: "#666" }}> ({ownerKey})</span>
-                )}
+                {base.icon} {base.name} Lv.{level}/{shopMaxSkill}
                 {!maxed && (
                   <div style={{ fontSize: 6, color: "#666", marginTop: 4 }}>
-                    Next: {describeSkillUpgrade(rawBase, level + 1, previewAttack)} — {price}💰
+                    Next: {describeSkillUpgrade(rawBase, level + 1, previewAttack, classKey)} — {price}💰
                   </div>
                 )}
               </button>
@@ -3406,7 +3776,7 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
         description: hint,
       }
     : cls;
-  const spriteKey = hidden ? spriteKeyForClass(classKey) : classKey;
+  const spriteKey = classKey;
 
   return (
     <button
@@ -3461,24 +3831,49 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
-        gap: 14,
         animation: "fadeUp 0.4s ease",
       }}
     >
-      <div style={{ fontSize: 10, color: COLORS.fight, marginBottom: 4 }}>
-        {t("select.heading")}
-      </div>
-      <div style={{ fontSize: 8, color: COLORS.gold, marginBottom: 4 }}>
-        {t("select.wallet")} 💰 {wallet.toLocaleString()}
-      </div>
-      {allTimeRecords?.rounds > 0 && (
-        <div style={{ fontSize: 7, color: COLORS.muted, marginBottom: 8 }}>
-          {t("select.bestRound")} {allTimeRecords.rounds}
+      <div
+        style={{
+          flexShrink: 0,
+          width: "100%",
+          maxWidth: 380,
+          textAlign: "center",
+          paddingBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 10, color: COLORS.fight, marginBottom: 4 }}>
+          {t("select.heading")}
         </div>
-      )}
+        <div style={{ fontSize: 8, color: COLORS.gold, marginBottom: 4 }}>
+          {t("select.wallet")} 💰 {wallet.toLocaleString()}
+        </div>
+        {allTimeRecords?.rounds > 0 && (
+          <div style={{ fontSize: 7, color: COLORS.muted }}>
+            {t("select.bestRound")} {allTimeRecords.rounds}
+          </div>
+        )}
+      </div>
 
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          width: "100%",
+          maxWidth: 380,
+          overflowY: "auto",
+          overflowX: "hidden",
+          WebkitOverflowScrolling: "touch",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 14,
+          paddingBottom: 8,
+        }}
+      >
       {CLASS_KEYS.map((key) => {
+        const unlocked = isBaseClassUnlocked(save, key);
         const best = save?.classes?.[key]?.bestFloorReached ?? 0;
         return (
           <ClassCard
@@ -3486,7 +3881,12 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
             classKey={key}
             cls={getLocalizedClass(key)}
             onSelect={onSelect}
-            hint={`${t("select.bestFloor")} ${best}/${COMBO_UNLOCK_FLOOR}`}
+            disabled={!unlocked}
+            hint={
+              unlocked
+                ? `${t("select.bestFloor")} ${best}/${COMBO_UNLOCK_FLOOR}`
+                : baseClassUnlockHint(key)
+            }
           />
         );
       })}
@@ -3510,6 +3910,7 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
           />
         );
       })}
+      </div>
     </div>
   );
 }
@@ -3619,14 +4020,14 @@ function BattleScene({ game }) {
     streak,
     round,
     log,
-    isMagicMenuOpen, enemyFrozen, floatingNumbers,
+    isSkillsMenuOpen, enemyFrozen, floatingNumbers,
     shakeTarget, flashType, streakPop, coinPop,
     isPlayerTurn, streakMultiplier,
-    actionFight, actionDefend, actionRetreat, actionMagic, openMagicMenu,
+    actionFight, actionDefend, actionRetreat, actionMagic, openSkillsMenu,
     battleTurn,
     autoEnabled, autoPaused, battleSpeedMultiplier, battleSpeedIndex,
     allTimeRecords,
-    setIsMagicMenuOpen, setAutoEnabled, setAutoPaused, setBattleSpeedIndex,
+    setIsSkillsMenuOpen, setAutoEnabled, setAutoPaused, setBattleSpeedIndex,
     resumeAutoAfterToggle,
     isBossRound,
     canAutoSkipBoss,
@@ -3786,20 +4187,20 @@ function BattleScene({ game }) {
       />
 
       {/* Commands */}
-      {!isMagicMenuOpen ? (
+      {!isSkillsMenuOpen ? (
         <ActionButtons
           isPlayerTurn={isPlayerTurn}
           onFight={actionFight}
-          onMagic={openMagicMenu}
+          onSkills={openSkillsMenu}
           onDefend={actionDefend}
           onRun={actionRetreat}
           runDisabled={bossBlocksAuto}
         />
       ) : (
-        <MagicMenu
+        <SkillsMenu
           skills={player?.skills || []}
           onSelectSkill={actionMagic}
-          onClose={() => setIsMagicMenuOpen(false)}
+          onClose={() => setIsSkillsMenuOpen(false)}
         />
       )}
 

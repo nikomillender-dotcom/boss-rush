@@ -12,22 +12,12 @@ const htmlPath = path.join(__dirname, "generate-cat-sprites.html");
 const outBase = path.join(__dirname, "..", "public", "sprites", "cats");
 
 async function main() {
-  const refPath = path.join(__dirname, "reference", "mage-cat-reference.png");
-  const refB64 = fs.existsSync(refPath)
-    ? fs.readFileSync(refPath).toString("base64")
-    : null;
-
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  if (refB64) {
-    await page.addInitScript((b64) => {
-      window.__mageRefB64 = b64;
-    }, refB64);
-  }
   await page.goto(`file:///${htmlPath.replace(/\\/g, "/")}`);
   await page.waitForFunction(
-    () => window.exports && window.exports.length >= 16,
-    { timeout: 15000 }
+    () => window.exports && window.exports.length >= 40,
+    { timeout: 20000 }
   );
 
   const items = await page.evaluate(() =>

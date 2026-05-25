@@ -28,14 +28,7 @@ h2{color:#88aa88;font-size:9px;letter-spacing:2px;text-transform:uppercase;margi
   <strong>Combat (96px):</strong> back-facing — cat faces up toward the enemy.<br>
   Unzip into <code>public/sprites/cats/</code>.
 </p>
-<div class="ref-wrap">
-  <img id="ref-preview" alt="mage reference" width="96" height="96">
-  <div style="font-size:8px;color:#666;max-width:320px;line-height:1.8">
-    Mage <code>box.png</code> is scaled from
-    <code>tools/reference/mage-cat-reference.png</code>.
-    Combat uses <strong>back</strong> sprites (faces enemy); alert/hurt overlay the healthy back (plan hybrid).
-  </div>
-</div>
+<p class="sub">Pixel cat heads + class props. Combos show two small parent props on one head.</p>
 <button type="button" id="dl-all">↓ Download ZIP (game-ready paths)</button>
 <h2>Box — front 48×48</h2>
 <div class="grid" id="box-grid"></div>
@@ -74,25 +67,56 @@ const P = {
   hurt: "#d03030",
   bandage: "#e8e8f0",
   sparkle: "#0a0a12",
+  holy: "#c8a830",
+  holyHi: "#f0e070",
+  holySh: "#8a7020",
+  clerical: "#e8e8f8",
+  sun: "#ffb040",
+  sunHi: "#ffe080",
+  plague: "#68c848",
+  plagueSh: "#388828",
 };
 
-const CLASSES = ["warrior", "mage", "rogue", "mage_knight"];
+const CLASSES = [
+  "warrior",
+  "mage",
+  "rogue",
+  "cleric",
+  "mage_knight",
+  "sage",
+  "templar",
+  "duelist",
+  "arcanist",
+  "plaguecat",
+];
+
 const LABELS = {
   warrior: "Tabby Knight",
   mage: "Whisker Mage",
   rogue: "Shadow Cat",
+  cleric: "Holy Whisk",
   mage_knight: "Spellclaw Knight",
+  sage: "Sage of the Meow",
+  templar: "Sunclaw Templar",
+  duelist: "Bladeclaw Duelist",
+  arcanist: "Trickclaw Arcanist",
+  plaguecat: "Plagueclaw",
 };
 
 const CLASS_GEAR = {
   warrior: { cape: P.silver, capeHi: P.silverHi, capeSh: P.silverSh, hat: P.silver, accent: P.gold },
   mage: { cape: P.mage, capeHi: P.mageHi, capeSh: P.mageSh, hat: P.mage, accent: P.gold },
   rogue: { cape: P.rogue, capeHi: P.rogueHi, capeSh: P.rogueSh, hat: P.rogue, accent: P.leather },
+  cleric: { cape: P.holySh, capeHi: P.holy, capeSh: P.holySh, hat: P.clerical, accent: P.holyHi },
   mage_knight: { cape: P.mage, capeHi: P.mageHi, capeSh: P.mageSh, hat: P.mage, accent: P.teal },
+  sage: { cape: P.mage, capeHi: P.mageHi, capeSh: P.mageSh, hat: P.mage, accent: P.holy },
+  templar: { cape: P.silver, capeHi: P.silverHi, capeSh: P.silverSh, hat: P.silver, accent: P.sun },
+  duelist: { cape: P.rogue, capeHi: P.rogueHi, capeSh: P.rogueSh, hat: P.silver, accent: P.leather },
+  arcanist: { cape: P.rogue, capeHi: P.rogueHi, capeSh: P.rogueSh, hat: P.mage, accent: P.teal },
+  plaguecat: { cape: P.rogue, capeHi: P.rogueHi, capeSh: P.rogueSh, hat: P.plagueSh, accent: P.plague },
 };
 
 const exports = [];
-let mageReference = null;
 
 function makeCanvas(w, h) {
   const cv = document.createElement("canvas");
@@ -138,6 +162,128 @@ function gridBuffer() {
   return { set, rect, outline, px };
 }
 
+function drawFrontClassProps(classKey, gear, set, rect) {
+  switch (classKey) {
+    case "warrior":
+      rect(5, 0, 14, 5, gear.hat);
+      rect(7, 0, 10, 1, gear.accent);
+      rect(1, 13, 3, 7, P.silver);
+      rect(2, 12, 1, 1, P.silverHi);
+      break;
+    case "mage":
+      rect(8, 0, 8, 6, gear.hat);
+      rect(10, 0, 4, 2, gear.capeHi);
+      rect(19, 8, 2, 10, gear.hat);
+      set(19, 7, P.goldHi);
+      break;
+    case "rogue":
+      rect(4, 1, 16, 5, gear.hat);
+      rect(4, 2, 2, 8, gear.hat);
+      rect(18, 2, 2, 8, gear.hat);
+      rect(21, 13, 2, 6, P.leather);
+      break;
+    case "cleric":
+      rect(8, 1, 8, 4, P.clerical);
+      rect(9, 13, 6, 4, P.holy);
+      rect(11, 14, 2, 2, P.holyHi);
+      rect(10, 12, 6, 1, P.holySh);
+      break;
+    case "mage_knight":
+      rect(5, 0, 14, 4, P.silver);
+      rect(1, 13, 3, 7, P.silver);
+      rect(19, 8, 2, 10, P.teal);
+      set(19, 7, P.tealHi);
+      rect(10, 13, 4, 2, P.mage);
+      break;
+    case "sage":
+      rect(8, 0, 8, 6, P.mage);
+      rect(19, 8, 2, 10, P.mageHi);
+      rect(9, 13, 6, 3, P.holy);
+      set(12, 14, P.holyHi);
+      break;
+    case "templar":
+      rect(5, 0, 14, 5, P.silver);
+      rect(1, 13, 3, 7, P.silver);
+      rect(9, 13, 6, 3, P.sun);
+      rect(11, 14, 2, 1, P.sunHi);
+      break;
+    case "duelist":
+      rect(5, 0, 14, 4, P.silver);
+      rect(4, 2, 2, 7, P.rogue);
+      rect(18, 2, 2, 7, P.rogue);
+      rect(21, 13, 2, 6, P.leather);
+      rect(1, 14, 2, 6, P.silver);
+      break;
+    case "arcanist":
+      rect(4, 1, 16, 5, P.rogue);
+      rect(8, 0, 8, 5, P.mage);
+      rect(19, 8, 2, 10, P.mage);
+      rect(21, 13, 2, 5, P.rogueHi);
+      break;
+    case "plaguecat":
+      rect(4, 1, 16, 5, P.rogue);
+      rect(8, 12, 8, 6, P.plagueSh);
+      rect(9, 13, 6, 3, P.plague);
+      rect(21, 13, 2, 6, P.plagueSh);
+      rect(10, 5, 4, 2, P.plague);
+      break;
+    default:
+      break;
+  }
+}
+
+function drawBackClassProps(classKey, g, set, rect) {
+  switch (classKey) {
+    case "warrior":
+      rect(2, 11, 3, 7, P.silver);
+      rect(9, 10, 6, 4, g.hat);
+      break;
+    case "mage":
+      rect(17, 8, 3, 11, g.hat);
+      rect(8, 0, 8, 3, g.hat);
+      break;
+    case "rogue":
+      rect(4, 1, 16, 6, g.hat);
+      rect(17, 12, 3, 6, P.rogue);
+      break;
+    case "cleric":
+      rect(8, 10, 8, 5, P.holy);
+      rect(10, 0, 4, 3, P.clerical);
+      break;
+    case "mage_knight":
+      rect(2, 11, 3, 7, P.silver);
+      rect(17, 8, 3, 11, P.teal);
+      rect(9, 11, 6, 3, P.mage);
+      break;
+    case "sage":
+      rect(17, 8, 3, 11, P.mage);
+      rect(9, 11, 6, 3, P.holy);
+      break;
+    case "templar":
+      rect(2, 11, 3, 7, P.silver);
+      rect(9, 11, 6, 3, P.sun);
+      rect(10, 0, 4, 2, P.sunHi);
+      break;
+    case "duelist":
+      rect(2, 11, 3, 7, P.silver);
+      rect(17, 12, 3, 6, P.rogue);
+      rect(4, 1, 16, 5, g.hat);
+      break;
+    case "arcanist":
+      rect(4, 1, 16, 5, P.rogue);
+      rect(17, 8, 3, 11, P.mage);
+      rect(3, 13, 2, 5, P.rogue);
+      break;
+    case "plaguecat":
+      rect(4, 1, 16, 5, P.rogue);
+      rect(8, 11, 8, 6, P.plagueSh);
+      rect(17, 12, 3, 5, P.plague);
+      break;
+    default:
+      break;
+  }
+}
+
 /** Front-facing sitting cat (menu / box) */
 function drawFrontBox(classKey) {
   const gear = CLASS_GEAR[classKey];
@@ -156,9 +302,6 @@ function drawFrontBox(classKey) {
   rect(7, 11, 10, 9, gear.cape);
   rect(8, 12, 8, 2, gear.capeHi);
   rect(10, 13, 4, 1, gear.capeSh);
-  rect(10, 12, 4, 1, P.band);
-  set(11, 12, P.gold);
-  set(12, 12, P.goldHi);
   rect(7, 5, 10, 7, P.fur);
   rect(8, 5, 8, 1, P.furHi);
   rect(7, 3, 2, 3, P.fur);
@@ -166,27 +309,7 @@ function drawFrontBox(classKey) {
   set(8, 4, P.furSh);
   set(15, 4, P.furSh);
 
-  if (classKey === "warrior") {
-    rect(6, 1, 12, 4, gear.hat);
-    rect(6, 1, 12, 1, gear.capeHi);
-    rect(7, 0, 10, 1, gear.accent);
-  } else if (classKey === "rogue") {
-    rect(6, 2, 12, 4, gear.hat);
-    rect(5, 3, 1, 6, gear.hat);
-    rect(18, 3, 1, 6, gear.hat);
-  } else {
-    rect(11, 0, 2, 1, gear.hat);
-    rect(10, 1, 4, 1, gear.hat);
-    rect(9, 2, 6, 2, gear.hat);
-    rect(7, 4, 10, 1, gear.hat);
-    rect(10, 0, 2, 1, gear.capeHi);
-    rect(7, 4, 10, 1, P.band);
-    set(11, 4, P.gold);
-    if (classKey === "mage_knight") {
-      rect(18, 10, 1, 8, P.teal);
-      set(18, 9, P.tealHi);
-    }
-  }
+  drawFrontClassProps(classKey, gear, set, rect);
 
   rect(9, 7, 2, 2, P.eye);
   rect(13, 7, 2, 2, P.eye);
@@ -261,19 +384,7 @@ function drawBackCombatBase(classKey, withSparkles) {
   rect(6, 4, 2, 2, P.fur);
   rect(16, 4, 2, 2, P.fur);
 
-  // Class back details
-  if (classKey === "warrior") {
-    rect(9, 11, 6, 3, g.hat);
-    rect(9, 11, 6, 1, g.capeHi);
-  } else if (classKey === "rogue") {
-    rect(6, 2, 12, 5, g.hat);
-    rect(5, 3, 1, 8, g.hat);
-    rect(18, 3, 1, 8, g.hat);
-  } else if (classKey === "mage_knight") {
-    rect(18, 9, 2, 10, P.teal);
-    set(18, 8, P.tealHi);
-    rect(9, 11, 6, 2, g.capeHi);
-  }
+  drawBackClassProps(classKey, g, set, rect);
 
   outline();
   return paintGrid(px, 96);
@@ -367,19 +478,6 @@ function makeCard(cv, zipPath, label, previewPx) {
   return card;
 }
 
-async function loadReference() {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("Could not load reference PNG"));
-    if (window.__mageRefB64) {
-      img.src = `data:image/png;base64,${window.__mageRefB64}`;
-    } else {
-      img.src = "reference/mage-cat-reference.png";
-    }
-  });
-}
-
 async function buildAll() {
   const boxGrid = document.getElementById("box-grid");
   const combatGrid = document.getElementById("combat-grid");
@@ -387,20 +485,8 @@ async function buildAll() {
   combatGrid.innerHTML = "";
   exports.length = 0;
 
-  try {
-    mageReference = await loadReference();
-    document.getElementById("ref-preview").src = mageReference.src;
-  } catch (e) {
-    console.warn(e);
-  }
-
   for (const cls of CLASSES) {
-    let cv;
-    if (cls === "mage" && mageReference) {
-      cv = scaleReference(mageReference, 48);
-    } else {
-      cv = drawFrontBox(cls);
-    }
+    const cv = drawFrontBox(cls);
     const zipPath = `${cls}/box.png`;
     exports.push({ cv, zipPath });
     boxGrid.appendChild(makeCard(cv, zipPath, `${LABELS[cls]} — box (front)`, 96));

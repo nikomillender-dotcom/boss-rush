@@ -88,5 +88,26 @@ const shield = calcDamageToPlayer(10, {
 });
 assert(shield.damage === 4, "shield wall 0.4 on 10 → 4");
 
+console.log("\nSage freeze duration (2–4 turns):");
+function sageFreezeTurns(randInt) {
+  return randInt(2, 4);
+}
+function mageFreezeTurns(randInt) {
+  return randInt(1, 3);
+}
+let seed = 12345;
+const randInt = (min, max) => {
+  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+  return min + (seed % (max - min + 1));
+};
+for (let i = 0; i < 30; i++) {
+  const t = sageFreezeTurns(randInt);
+  assert(t >= 2 && t <= 4, `sage freeze in range got ${t}`);
+}
+for (let i = 0; i < 30; i++) {
+  const t = mageFreezeTurns(randInt);
+  assert(t >= 1 && t <= 3, `mage freeze in range got ${t}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

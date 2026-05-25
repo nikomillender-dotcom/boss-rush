@@ -24,7 +24,9 @@ export const SCALING_CONFIG = {
   megaBossRound: 100,
 
   shopMaxBoost: 100,
+  comboShopMaxBoost: 200,
   maxSkillLevel: 100,
+  comboMaxSkillLevel: 200,
 
   hpPriceBase: 120,
   hpPriceGrowth: 1.48,
