@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Boss Rush — Cat Sprite Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#080810;color:#e8dcc8;font-family:"Courier New",monospace;padding:20px;max-width:1100px;margin:0 auto;}
+h1{color:#FFD700;font-size:14px;letter-spacing:2px;}
+.sub{color:#555;font-size:9px;line-height:1.9;margin:12px 0;}
+h2{color:#88aa88;font-size:9px;letter-spacing:2px;text-transform:uppercase;margin:18px 0 8px;border-bottom:1px solid #1a1a28;padding-bottom:4px;}
+.grid{display:flex;flex-wrap:wrap;gap:10px;}
+.card{background:#0c0c18;border:1px solid #2a2a4a;padding:10px;text-align:center;border-radius:6px;}
+.card canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;margin:0 auto 8px;background:repeating-conic-gradient(#0c0c18 0% 25%,#080810 0% 50%) 0 0/6px 6px;}
+.ref-wrap{margin:12px 0;padding:12px;background:#0c0c18;border:1px solid #2a2a4a;border-radius:6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;}
+.ref-wrap img{width:96px;height:96px;image-rendering:pixelated;border:1px solid #333;}
+.ct{font-size:8px;color:#88aa88;}.cf{font-size:7px;color:#444;margin:6px 0;}
+.dl{display:block;width:100%;background:#0a140a;color:#55cc55;border:1px solid #1a3a1a;padding:4px;font-size:8px;font-family:inherit;cursor:pointer;}
+#dl-all{background:#12122a;color:#aaaaff;border:1px solid #2a2a4a;padding:8px 14px;font-size:9px;font-family:inherit;cursor:pointer;margin-bottom:8px;}
+#dl-all:disabled{opacity:.5;}
+</style>
+</head>
+<body>
+<h1>BOSS RUSH — CAT SPRITES</h1>
+<p class="sub">
+  <strong>Box (48px):</strong> front-facing — class select &amp; camp.<br>
+  <strong>Combat (96px):</strong> back-facing — cat faces up toward the enemy.<br>
+  Unzip into <code>public/sprites/cats/</code>.
+</p>
+<div class="ref-wrap">
+  <img id="ref-preview" alt="mage reference" width="96" height="96">
+  <div style="font-size:8px;color:#666;max-width:320px;line-height:1.8">
+    Mage <code>box.png</code> is scaled from
+    <code>tools/reference/mage-cat-reference.png</code>.
+    Combat uses <strong>back</strong> sprites (faces enemy); alert/hurt overlay the healthy back (plan hybrid).
+  </div>
+</div>
+<button type="button" id="dl-all">↓ Download ZIP (game-ready paths)</button>
+<h2>Box — front 48×48</h2>
+<div class="grid" id="box-grid"></div>
+<h2>Combat — back 96×96 (faces enemy)</h2>
+<div class="grid" id="combat-grid"></div>
+<p class="sub" id="foot"></p>
+
+<script>
+// Reference palette (black cat + purple mage gear)
+const P = {
+  outline: "#0a0a12",
+  fur: "#1e1e28",
+  furHi: "#3a3a48",
+  furSh: "#121218",
+  chest: "#5a5a68",
+  eye: "#5ae848",
+  eyeHi: "#9aff78",
+  fang: "#f8f8f8",
+  nose: "#e85848",
+  mage: "#6b3fa8",
+  mageHi: "#9a6fd4",
+  mageSh: "#4a2878",
+  band: "#6a4428",
+  gold: "#e8c838",
+  goldHi: "#fff0a0",
+  silver: "#8a98a8",
+  silverHi: "#c8d8e8",
+  silverSh: "#5a6878",
+  rogue: "#2a2838",
+  rogueHi: "#4a4860",
+  rogueSh: "#141220",
+  teal: "#38b8b0",
+  tealHi: "#68e8e0",
+  leather: "#6a4420",
+  sweat: "#88bbee",
+  hurt: "#d03030",
+  bandage: "#e8e8f0",
+  sparkle: "#0a0a12",
+};
+
+const CLASSES = ["warrior", "mage", "rogue", "mage_knight"];
+const LABELS = {
+  warrior: "Tabby Knight",
+  mage: "Whisker Mage",
+  rogue: "Shadow Cat",
+  mage_knight: "Spellclaw Knight",
+};
+
+const CLASS_GEAR = {
+  warrior: { cape: P.silver, capeHi: P.silverHi, capeSh: P.silverSh, hat: P.silver, accent: P.gold },
+  mage: { cape: P.mage, capeHi: P.mageHi, capeSh: P.mageSh, hat: P.mage, accent: P.gold },
+  rogue: { cape: P.rogue, capeHi: P.rogueHi, capeSh: P.rogueSh, hat: P.rogue, accent: P.leather },
+  mage_knight: { cape: P.mage, capeHi: P.mageHi, capeSh: P.mageSh, hat: P.mage, accent: P.teal },
+};
+
+const exports = [];
+let mageReference = null;
+
+function makeCanvas(w, h) {
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  ctx.imageSmoothingEnabled = false;
+  return { cv, ctx };
+}
+
+function paintGrid(px, size) {
+  const { cv, ctx } = makeCanvas(size, size);
+  const u = size / 24;
+  for (const k of Object.keys(px)) {
+    const [x, y] = k.split(",").map(Number);
+    ctx.fillStyle = px[k];
+    ctx.fillRect(Math.round(x * u), Math.round(y * u), Math.ceil(u), Math.ceil(u));
+  }
+  return cv;
+}
+
+function gridBuffer() {
+  const px = {};
+  const key = (x, y) => `${x},${y}`;
+  const set = (x, y, c) => {
+    if (x < 0 || y < 0 || x >= 24 || y >= 24 || !c) return;
+    px[key(x, y)] = c;
+  };
+  const rect = (x, y, w, h, c) => {
+    for (let dy = 0; dy < h; dy++)
+      for (let dx = 0; dx < w; dx++) set(x + dx, y + dy, c);
+  };
+  const outline = () => {
+    const filled = { ...px };
+    for (const k of Object.keys(filled)) {
+      const [x, y] = k.split(",").map(Number);
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+        if (!filled[key(nx, ny)]) set(nx, ny, P.outline);
+      }
+    }
+  };
+  return { set, rect, outline, px };
+}
+
+/** Front-facing sitting cat (menu / box) */
+function drawFrontBox(classKey) {
+  const gear = CLASS_GEAR[classKey];
+  const { set, rect, outline, px } = gridBuffer();
+
+  rect(3, 16, 2, 2, P.fur);
+  rect(2, 14, 2, 2, P.fur);
+  rect(1, 12, 2, 2, P.furSh);
+  rect(8, 20, 3, 2, P.fur);
+  rect(13, 20, 3, 2, P.fur);
+  rect(7, 12, 10, 9, P.fur);
+  rect(9, 14, 6, 6, P.chest);
+  rect(7, 12, 1, 8, P.furHi);
+  rect(5, 11, 2, 10, gear.cape);
+  rect(17, 11, 2, 10, gear.cape);
+  rect(7, 11, 10, 9, gear.cape);
+  rect(8, 12, 8, 2, gear.capeHi);
+  rect(10, 13, 4, 1, gear.capeSh);
+  rect(10, 12, 4, 1, P.band);
+  set(11, 12, P.gold);
+  set(12, 12, P.goldHi);
+  rect(7, 5, 10, 7, P.fur);
+  rect(8, 5, 8, 1, P.furHi);
+  rect(7, 3, 2, 3, P.fur);
+  rect(15, 3, 2, 3, P.fur);
+  set(8, 4, P.furSh);
+  set(15, 4, P.furSh);
+
+  if (classKey === "warrior") {
+    rect(6, 1, 12, 4, gear.hat);
+    rect(6, 1, 12, 1, gear.capeHi);
+    rect(7, 0, 10, 1, gear.accent);
+  } else if (classKey === "rogue") {
+    rect(6, 2, 12, 4, gear.hat);
+    rect(5, 3, 1, 6, gear.hat);
+    rect(18, 3, 1, 6, gear.hat);
+  } else {
+    rect(11, 0, 2, 1, gear.hat);
+    rect(10, 1, 4, 1, gear.hat);
+    rect(9, 2, 6, 2, gear.hat);
+    rect(7, 4, 10, 1, gear.hat);
+    rect(10, 0, 2, 1, gear.capeHi);
+    rect(7, 4, 10, 1, P.band);
+    set(11, 4, P.gold);
+    if (classKey === "mage_knight") {
+      rect(18, 10, 1, 8, P.teal);
+      set(18, 9, P.tealHi);
+    }
+  }
+
+  rect(9, 7, 2, 2, P.eye);
+  rect(13, 7, 2, 2, P.eye);
+  set(10, 8, P.furSh);
+  set(14, 8, P.furSh);
+  set(9, 7, P.eyeHi);
+  set(13, 7, P.eyeHi);
+  set(11, 9, 2, 1, P.nose);
+  set(10, 10, P.fang);
+  set(13, 10, P.fang);
+
+  outline();
+  return paintGrid(px, 48);
+}
+
+/** Back view base (faces toward top of screen / enemy) */
+function drawBackCombatBase(classKey, withSparkles) {
+  const g = CLASS_GEAR[classKey];
+  const { set, rect, outline, px } = gridBuffer();
+
+  if (withSparkles) {
+    const spark = (x, y) => {
+      set(x, y, P.sparkle);
+      set(x + 1, y, P.sparkle);
+      set(x, y + 1, P.sparkle);
+      set(x + 1, y + 1, P.sparkle);
+    };
+    spark(2, 8);
+    spark(20, 6);
+    spark(21, 14);
+    spark(1, 15);
+  }
+
+  // Tail (visible on right side from back)
+  rect(19, 14, 2, 2, P.fur);
+  rect(20, 12, 2, 2, P.fur);
+  rect(21, 10, 1, 2, P.furSh);
+
+  // Paws (bottom, facing away)
+  rect(8, 20, 3, 2, P.fur);
+  rect(13, 20, 3, 2, P.fur);
+  rect(8, 21, 3, 1, P.furSh);
+  rect(13, 21, 3, 1, P.furSh);
+
+  // Cape spread (wide back)
+  rect(4, 10, 16, 10, g.cape);
+  rect(6, 11, 12, 8, g.capeHi);
+  rect(8, 14, 8, 4, g.capeSh);
+  // Cape hem highlight
+  rect(5, 18, 14, 1, g.capeHi);
+
+  // Shoulders / upper back
+  rect(7, 10, 10, 4, P.fur);
+  rect(8, 10, 8, 1, P.furHi);
+
+  // Head back (toward top y=0)
+  rect(8, 4, 8, 6, P.fur);
+  rect(9, 4, 6, 1, P.furSh);
+
+  // Hat from behind (domed)
+  rect(7, 1, 10, 4, g.hat);
+  rect(8, 0, 8, 2, g.hat);
+  rect(8, 0, 8, 1, g.capeHi);
+  if (classKey === "warrior") {
+    rect(7, 3, 10, 1, g.accent);
+  } else if (classKey !== "rogue") {
+    rect(7, 3, 10, 1, P.band);
+    set(11, 3, P.gold);
+  }
+
+  // Ears from behind (tips peek out)
+  rect(6, 4, 2, 2, P.fur);
+  rect(16, 4, 2, 2, P.fur);
+
+  // Class back details
+  if (classKey === "warrior") {
+    rect(9, 11, 6, 3, g.hat);
+    rect(9, 11, 6, 1, g.capeHi);
+  } else if (classKey === "rogue") {
+    rect(6, 2, 12, 5, g.hat);
+    rect(5, 3, 1, 8, g.hat);
+    rect(18, 3, 1, 8, g.hat);
+  } else if (classKey === "mage_knight") {
+    rect(18, 9, 2, 10, P.teal);
+    set(18, 8, P.tealHi);
+    rect(9, 11, 6, 2, g.capeHi);
+  }
+
+  outline();
+  return paintGrid(px, 96);
+}
+
+const SPARKLE_GRID = [
+  [2, 8],
+  [20, 6],
+  [21, 14],
+  [1, 15],
+];
+
+/** Pose overlays on 96px back sprite (plan: branch from healthy) */
+function applyBackPoseOverlay(baseCv, classKey, pose) {
+  const { cv, ctx } = makeCanvas(96, 96);
+  ctx.drawImage(baseCv, 0, 0);
+  const u = 96 / 24;
+  const px = (gx, gy, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(gx * u), Math.round(gy * u), Math.round(w * u), Math.round(h * u));
+  };
+
+  if (pose === "alert") {
+    for (const [sx, sy] of SPARKLE_GRID) {
+      px(sx, sy, 2, 2, P.mageSh);
+    }
+    px(7, 1, 10, 1, P.furSh);
+    px(3, 5, 1, 3, P.sweat);
+    px(3, 5, 1, 1, P.white);
+    px(8, 9, 8, 1, P.furSh);
+    if (classKey === "mage") {
+      px(5, 2, 2, 1, P.furSh);
+      px(16, 2, 2, 1, P.furSh);
+    }
+  } else if (pose === "hurt") {
+    for (const [sx, sy] of SPARKLE_GRID) {
+      px(sx, sy, 2, 2, P.mageSh);
+    }
+    px(6, 1, 5, 2, P.bandage);
+    px(7, 1, 3, 1, P.hurt);
+    px(14, 2, 4, 2, P.hurt);
+    px(9, 12, 6, 1, P.hurt);
+    px(2, 7, 1, 1, P.hurt);
+    px(21, 8, 1, 1, P.hurt);
+    px(6, 11, 2, 1, P.furSh);
+    px(16, 11, 2, 1, P.furSh);
+  }
+
+  return cv;
+}
+
+function drawCombatSprite(classKey, pose) {
+  const healthy = drawBackCombatBase(classKey, true);
+  if (pose === "healthy") return healthy;
+  return applyBackPoseOverlay(healthy, classKey, pose);
+}
+
+function scaleReference(img, size) {
+  const { cv, ctx } = makeCanvas(size, size);
+  const scale = Math.min(size / img.width, size / img.height) * 0.92;
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const x = Math.floor((size - w) / 2);
+  const y = size - h - Math.max(1, Math.floor(size * 0.04));
+  ctx.drawImage(img, 0, 0, img.width, img.height, x, y, w, h);
+  return cv;
+}
+
+function makeCard(cv, zipPath, label, previewPx) {
+  const card = document.createElement("div");
+  card.className = "card";
+  cv.style.width = `${previewPx}px`;
+  cv.style.height = `${previewPx}px`;
+  const lbl = document.createElement("div");
+  lbl.className = "ct";
+  lbl.textContent = label;
+  const fn = document.createElement("div");
+  fn.className = "cf";
+  fn.textContent = zipPath;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "dl";
+  btn.textContent = "↓ Save PNG";
+  btn.onclick = () => {
+    const a = document.createElement("a");
+    a.href = cv.toDataURL("image/png");
+    a.download = zipPath.split("/").pop();
+    a.click();
+  };
+  card.append(lbl, cv, fn, btn);
+  return card;
+}
+
+async function loadReference() {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not load reference PNG"));
+    if (window.__mageRefB64) {
+      img.src = `data:image/png;base64,${window.__mageRefB64}`;
+    } else {
+      img.src = "reference/mage-cat-reference.png";
+    }
+  });
+}
+
+async function buildAll() {
+  const boxGrid = document.getElementById("box-grid");
+  const combatGrid = document.getElementById("combat-grid");
+  boxGrid.innerHTML = "";
+  combatGrid.innerHTML = "";
+  exports.length = 0;
+
+  try {
+    mageReference = await loadReference();
+    document.getElementById("ref-preview").src = mageReference.src;
+  } catch (e) {
+    console.warn(e);
+  }
+
+  for (const cls of CLASSES) {
+    let cv;
+    if (cls === "mage" && mageReference) {
+      cv = scaleReference(mageReference, 48);
+    } else {
+      cv = drawFrontBox(cls);
+    }
+    const zipPath = `${cls}/box.png`;
+    exports.push({ cv, zipPath });
+    boxGrid.appendChild(makeCard(cv, zipPath, `${LABELS[cls]} — box (front)`, 96));
+  }
+
+  for (const pose of ["healthy", "alert", "hurt"]) {
+    for (const cls of CLASSES) {
+      const cv = drawCombatSprite(cls, pose);
+      const zipPath = `${cls}/combat_${pose}.png`;
+      exports.push({ cv, zipPath });
+      combatGrid.appendChild(
+        makeCard(cv, zipPath, `${LABELS[cls]} — back / ${pose}`, 128)
+      );
+    }
+  }
+
+  document.getElementById("foot").textContent =
+    `Ready: ${exports.length} sprites. Combat backs face upward (toward enemy).`;
+  window.exports = exports;
+}
+
+document.getElementById("dl-all").onclick = async () => {
+  const btn = document.getElementById("dl-all");
+  btn.disabled = true;
+  btn.textContent = "Packaging…";
+  try {
+    if (!exports.length) await buildAll();
+    const zip = new JSZip();
+    for (const { cv, zipPath } of exports) {
+      const b64 = cv.toDataURL("image/png").split(",")[1];
+      zip.file(zipPath, b64, { base64: true });
+    }
+    const blob = await zip.generateAsync({ type: "blob" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "boss-rush-cat-sprites.zip";
+    a.click();
+    btn.textContent = "✓ Downloaded";
+  } catch (e) {
+    console.error(e);
+    alert(e.message || e);
+    btn.textContent = "↓ Download ZIP (game-ready paths)";
+  }
+  btn.disabled = false;
+};
+
+buildAll();
+</script>
+</body>
+</html>
