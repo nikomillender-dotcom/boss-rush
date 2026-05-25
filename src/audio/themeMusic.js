@@ -21,6 +21,14 @@ const BATTLE_VOL = 0.4;
 const CAMP_VOL = 0.28;
 const MUTE_KEY = "bossRush_muted";
 
+/** When present, used for all combat BGM (drop your own phonk loop here). */
+const BATTLE_TRACK_CANDIDATES = ["/audio/battle.ogg", "/audio/battle.mp3"];
+
+/** Theme ids without a file fall back to this track. */
+const THEME_FALLBACK_ID = "human";
+
+const FREEPLAY_THEME_ID = "angelic";
+
 let campAudio = null;
 let battleAudio = null;
 let currentThemeId = null;
@@ -129,13 +137,43 @@ export async function playCampMusic() {
 }
 
 export function themeIdForRound(round) {
-  return resolveTheme(round).id;
+  const theme = resolveTheme(round);
+  if (typeof theme === "string") return theme;
+  return theme?.id ?? THEME_FALLBACK_ID;
+}
+
+let battleTrackSrc = null;
+let battleTrackChecked = false;
+
+async function resolveBattleTrackSrc(round) {
+  if (!battleTrackChecked) {
+    battleTrackChecked = true;
+    for (const src of BATTLE_TRACK_CANDIDATES) {
+      try {
+        const res = await fetch(src, { method: "HEAD" });
+        if (res.ok) {
+          battleTrackSrc = src;
+          break;
+        }
+      } catch {
+        /* offline dev */
+      }
+    }
+  }
+  if (battleTrackSrc) return battleTrackSrc;
+
+  let themeId = themeIdForRound(round);
+  if (themeId === "freeplay") themeId = FREEPLAY_THEME_ID;
+  if (!THEME_IDS.includes(themeId)) themeId = THEME_FALLBACK_ID;
+  return `/audio/themes/${themeId}.ogg`;
 }
 
 export async function playThemeForRound(round) {
   if (!unlocked) return;
-  const themeId = themeIdForRound(round);
-  if (themeId === currentThemeId && battleAudio) {
+  const src = await resolveBattleTrackSrc(round);
+  const trackKey = src;
+
+  if (trackKey === currentThemeId && battleAudio) {
     try {
       await battleAudio.play();
     } catch {
@@ -150,8 +188,7 @@ export async function playThemeForRound(round) {
   }
 
   await stopBattle();
-  currentThemeId = themeId;
-  const src = `/audio/themes/${themeId}.ogg`;
+  currentThemeId = trackKey;
   battleAudio = makeAudio(src, BATTLE_VOL);
   try {
     await battleAudio.play();

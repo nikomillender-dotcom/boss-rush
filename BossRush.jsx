@@ -1643,11 +1643,11 @@ function useGameEngine() {
     });
 
     const p = playerRef.current;
-    if (
+    const clearedWarCry =
       p &&
       p.warCryBuffExpiresOnTurn != null &&
-      battleTurnRef.current >= p.warCryBuffExpiresOnTurn
-    ) {
+      battleTurnRef.current >= p.warCryBuffExpiresOnTurn;
+    if (clearedWarCry) {
       commitPlayer({
         ...p,
         warCryBuffExpiresOnTurn: null,
@@ -2611,7 +2611,7 @@ function useGameEngine() {
         spawnFloat(`📯×${turns}`, "player", "#ff8c00");
         commitPlayer((p) => ({
           ...p,
-          warCryBuffExpiresOnTurn: battleTurnRef.current + turns,
+          warCryBuffExpiresOnTurn: battleTurnRef.current + 1 + turns,
         }));
         setTurn("animating");
         schedule(GAME_CONFIG.actionToEnemyTurn, () => {

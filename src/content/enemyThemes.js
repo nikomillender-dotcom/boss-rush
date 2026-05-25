@@ -365,6 +365,7 @@ export function buildEnemyFromCatalog(round, template) {
   }
 
   const themeBlock = THEME_BLOCKS.find((b) => b.id === template.theme);
+  const scaledMaxHp = Math.round(template.maxHp * scale);
 
   return {
     catalogId: template.id,
@@ -374,8 +375,8 @@ export function buildEnemyFromCatalog(round, template) {
     themeId: template.theme,
     flipSprite: Boolean(template.flipSprite || themeBlock?.flipSprite),
     tier: template.tier,
-    maxHp: template.maxHp,
-    hp: Math.round(template.maxHp * scale),
+    maxHp: scaledMaxHp,
+    hp: scaledMaxHp,
     attack,
     reward,
     speed: template.speed ?? 5,

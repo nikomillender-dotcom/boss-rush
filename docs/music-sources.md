@@ -4,6 +4,18 @@ All shipped BGM is **CC0** from [Kenney Music Loops](https://kenney.nl/assets/mu
 
 **Do not** use Final Fantasy or other copyrighted game rips.
 
+## Combat BGM (funk / phonk)
+
+All fights use **`public/audio/battle.ogg`** when that file exists (overrides per-theme Kenney loops).
+
+```bash
+npm run music:battle
+```
+
+This downloads a **CC0 funk loop** from OpenGameArt (not copyrighted viral Brazilian phonk). For a phonk vibe you control, export a **royalty-free** track (e.g. [Pixabay phonk license](https://pixabay.com/music/)) to `public/audio/battle.ogg` and list it in `CREDITS.txt`.
+
+Camp / title / shop still use `camp.ogg`.
+
 ## Regenerate theme files
 
 ```bash

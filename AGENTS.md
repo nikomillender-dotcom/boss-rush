@@ -67,8 +67,14 @@ node tools/war-cry-test.mjs
 node tools/save-meta-test.mjs
 ```
 
+## Battle music
+
+- Combat uses `public/audio/battle.ogg` or `battle.mp3` when present (`npm run music:battle`).
+- Per-theme Kenney loops in `public/audio/themes/` are fallback if battle track is missing.
+- Bug fix: `themeIdForRound` must use `resolveTheme()` string id (not `.id` on a string).
+
 ## Do not
 
-- Ship FF1 or other copyrighted music rips
+- Ship FF1, viral phonk rips, or other copyrighted music without a license
 - Commit `dist/` (Vercel builds from source)
 - Edit `.cursor/plans/*.plan.md` unless the user asks

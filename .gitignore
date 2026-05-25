@@ -7,3 +7,4 @@ dist
 .vercel
 tools/_kenney-*.zip
 tools/_jingles_extract/
+public/audio/battle-src.mp3

@@ -38,7 +38,7 @@ function getEffectiveDefense(player, battleTurn) {
 }
 
 function applyWarCry(battleTurn) {
-  return { warCryBuffExpiresOnTurn: battleTurn + WAR_CRY_BUFF_TURNS };
+  return { warCryBuffExpiresOnTurn: battleTurn + 1 + WAR_CRY_BUFF_TURNS };
 }
 
 function beginPlayerTurn(player, battleTurn) {
@@ -53,22 +53,23 @@ function beginPlayerTurn(player, battleTurn) {
 
 const base = { attack: 8, defense: 2 };
 
-console.log("War Cry at turn 0 (expires turn 2):");
+console.log("War Cry cast at turn 0 (expires turn 3 — two fight turns after cast):");
 let p = { ...base, ...applyWarCry(0) };
-assert(isWarCryBuffActive(p, 0), "active turn 0");
-assert(isWarCryBuffActive(p, 1), "active turn 1");
-assert(getEffectiveAttack(p, 0) === 10, "ATK 8 → 10");
-assert(getEffectiveDefense(p, 0) === 3, "DEF 2 → 3");
+assert(p.warCryBuffExpiresOnTurn === 3, "expires turn 3");
+assert(isWarCryBuffActive(p, 0), "active turn 0 (cast turn)");
+assert(isWarCryBuffActive(p, 1), "active turn 1 (first fight turn)");
+assert(isWarCryBuffActive(p, 2), "active turn 2 (second fight turn)");
+assert(getEffectiveAttack(p, 1) === 10, "ATK 8 → 10 on fight turn 1");
+assert(getEffectiveDefense(p, 1) === 3, "DEF 2 → 3 on fight turn 1");
 
-console.log("\nPersists for second player turn (no per-hit decrement):");
-assert(getEffectiveAttack(p, 1) === 10, "ATK still buffed turn 1");
-assert(getEffectiveAttack(p, 1) === 10, "ATK still buffed after simulated fight");
-assert(getEffectiveAttack(p, 1) === 10, "Power Strike path uses same ATK turn 1");
+console.log("\nSecond buffed fight turn:");
+assert(getEffectiveAttack(p, 2) === 10, "ATK still buffed turn 2");
+assert(getEffectiveAttack(p, 2) === 10, "Power Strike path uses same ATK turn 2");
 
-console.log("\nExpires at turn 2:");
-p = beginPlayerTurn(p, 2);
-assert(!isWarCryBuffActive(p, 2), "inactive turn 2");
-assert(getEffectiveAttack(p, 2) === 8, "ATK back to base");
+console.log("\nExpires at turn 3:");
+p = beginPlayerTurn(p, 3);
+assert(!isWarCryBuffActive(p, 3), "inactive turn 3");
+assert(getEffectiveAttack(p, 3) === 8, "ATK back to base");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
