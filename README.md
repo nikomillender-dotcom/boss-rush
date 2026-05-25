@@ -79,7 +79,8 @@ Regenerate: `npm run sprites` (or `tools/generate-cat-sprites.html`). See `publi
 
 ## Marketing
 
-- Ad / Claude handoff: [`docs/marketing-handoff.md`](docs/marketing-handoff.md)
+- Ad / creator handoff: [`docs/marketing-handoff.md`](docs/marketing-handoff.md)
+- Launch kit (copy, calendar, TikTok scripts): [`docs/marketing/README.md`](docs/marketing/README.md)
 
 ## Camp loop
 

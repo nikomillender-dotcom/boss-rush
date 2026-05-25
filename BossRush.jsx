@@ -3076,6 +3076,10 @@ function HpBar({ current, max, isPlayer }) {
 function CharacterSprite({ src, fallbackIcon, size, dead }) {
   const [failed, setFailed] = useState(false);
 
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
   if (!src || failed) {
     return (
       <div
@@ -4392,6 +4396,27 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
 
 export default function BossRush() {
   const game = useGameEngine();
+  const [musicMuted, setMusicMutedUi] = useState(() => getMusicMuted());
+
+  useEffect(() => {
+    if (game.scene === "battle") {
+      playThemeForRound(game.round);
+    } else if (
+      game.scene === "shop" ||
+      game.scene === "select" ||
+      game.scene === "title"
+    ) {
+      playCampMusic();
+    } else if (game.scene === "gameover") {
+      stopAllMusic();
+    }
+  }, [game.scene, game.round]);
+
+  const toggleMusic = () => {
+    const next = !getMusicMuted();
+    setMusicMuted(next);
+    setMusicMutedUi(next);
+  };
 
   return (
     <>

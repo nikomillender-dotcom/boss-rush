@@ -48,6 +48,10 @@ Endless turn-based **cat vs wacky dog** gauntlet — ten themed 100-floor arcs, 
 - War Cry: +25% ATK & DEF for 2 player turns
 - Per-theme background music + mute toggle (♪ / 🔇)
 
+## Launch marketing kit
+
+Full written package (Steam copy, TikTok scripts, Reddit drafts, market check): [`marketing/README.md`](marketing/README.md)
+
 ## Link preview
 
 Open Graph / Twitter meta in `index.html` — image uses `/icons/icon-512.png`.
