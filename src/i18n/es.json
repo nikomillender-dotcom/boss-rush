@@ -18,6 +18,7 @@
   "select.and": "y",
   "select.comboUnlock": "Llega al piso {floor} con {parents}.",
   "select.classUnlock": "Alcanza el piso {floor} con cualquier clase para desbloquear {name}.",
+  "select.lockedCombos": "— PRESTIGIO BLOQUEADO —",
   "shop.weapons": "Armas",
   "shop.skillUpgrades": "Mejoras de habilidad (Nv 10, CD - en 5 y 10)",
   "shop.comboInnate": "Innato de campamentos {parents} (arma ×{mult}).",

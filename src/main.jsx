@@ -5,7 +5,14 @@ import BossRush from "../BossRush.jsx";
 import InstallBanner from "./InstallBanner.jsx";
 import "./mobile.css";
 
-registerSW({ immediate: true });
+const updateSW = registerSW({
+  immediate: true,
+  onNeedRefresh() {
+    if (typeof window !== "undefined" && window.confirm("Boss Rush updated. Reload now?")) {
+      updateSW(true);
+    }
+  },
+});
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>

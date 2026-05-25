@@ -18,6 +18,7 @@
   "select.and": "and",
   "select.comboUnlock": "Reach floor {floor} with {parents}.",
   "select.classUnlock": "Reach floor {floor} on any class to unlock {name}.",
+  "select.lockedCombos": "— LOCKED PRESTIGE —",
   "shop.weapons": "Weapons",
   "shop.skillUpgrades": "Skill upgrades (Lv 10, Cooldown cut at 5 and 10)",
   "shop.comboInnate": "Innate from {parents} camps (weapon ×{mult}).",

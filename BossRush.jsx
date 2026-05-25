@@ -3781,6 +3781,7 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
   return (
     <button
       type="button"
+      className="class-select-card"
       onClick={() => !disabled && onSelect(classKey)}
       disabled={disabled}
       style={{
@@ -3857,6 +3858,7 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
       </div>
 
       <div
+        className="class-select-scroll"
         style={{
           flex: 1,
           minHeight: 0,
@@ -3865,11 +3867,13 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
           overflowY: "auto",
           overflowX: "hidden",
           WebkitOverflowScrolling: "touch",
+          overscrollBehavior: "contain",
+          touchAction: "pan-y",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 14,
-          paddingBottom: 8,
+          gap: 12,
+          paddingBottom: 12,
         }}
       >
       {CLASS_KEYS.map((key) => {
@@ -3891,8 +3895,9 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
         );
       })}
 
-      {COMBO_CLASS_KEYS.map((comboKey) => {
-        const unlocked = isComboUnlockedBySave(save, comboKey);
+      {COMBO_CLASS_KEYS.filter((comboKey) =>
+        isComboUnlockedBySave(save, comboKey)
+      ).map((comboKey) => {
         const best = save?.classes?.[comboKey]?.bestFloorReached ?? 0;
         return (
           <ClassCard
@@ -3900,16 +3905,55 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
             classKey={comboKey}
             cls={getLocalizedClass(comboKey)}
             onSelect={onSelect}
-            disabled={!unlocked}
-            hidden={!unlocked}
-            hint={
-              unlocked
-                ? `${getLocalizedClass(comboKey).description} · ${t("select.bestFloor")} ${best}`
-                : comboUnlockHint(comboKey)
-            }
+            hint={`${getLocalizedClass(comboKey).description} · ${t("select.bestFloor")} ${best}`}
           />
         );
       })}
+
+      {COMBO_CLASS_KEYS.some((comboKey) => !isComboUnlockedBySave(save, comboKey)) && (
+        <div
+          className="class-select-locked"
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            background: "#080810",
+            border: "1px solid #1a1a22",
+            borderRadius: 8,
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 7,
+              color: COLORS.muted,
+              marginBottom: 8,
+              textAlign: "center",
+            }}
+          >
+            {t("select.lockedCombos")}
+          </div>
+          {COMBO_CLASS_KEYS.filter(
+            (comboKey) => !isComboUnlockedBySave(save, comboKey)
+          ).map((comboKey) => (
+            <div
+              key={comboKey}
+              style={{
+                fontSize: 6,
+                color: COLORS.dimmed,
+                lineHeight: 1.85,
+                padding: "5px 0",
+                borderTop: "1px solid #141420",
+              }}
+            >
+              <span style={{ color: COLORS.muted }}>
+                {getLocalizedClass(comboKey).name}
+              </span>
+              <br />
+              {comboUnlockHint(comboKey)}
+            </div>
+          ))}
+        </div>
+      )}
       </div>
     </div>
   );

@@ -22,3 +22,23 @@ button,
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
+
+.class-select-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 480px) {
+  .class-select-card {
+    padding: 10px 12px !important;
+    gap: 10px !important;
+  }
+
+  .class-select-card > div:first-child {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .class-select-locked {
+    font-size: 6px;
+  }
+}
