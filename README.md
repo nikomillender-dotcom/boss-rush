@@ -18,9 +18,26 @@ Build and deploy `dist/` to any static host with HTTPS (Vercel, Netlify, or Clou
 npm run build
 ```
 
+### Push to GitHub (one-time)
+
+Git is initialized locally. GitHub CLI is installed but needs a login (interactive):
+
+```bash
+gh auth login
+cd "c:\Users\nikol\Documents\Boss Rush"
+gh repo create boss-rush --public --source=. --remote=origin --push
+```
+
+If your GitHub username is not `nikomillender`, update the remote first:
+
+```bash
+git remote set-url origin https://github.com/YOUR_USER/boss-rush.git
+git push -u origin main
+```
+
 ### Deploy on Vercel
 
-1. Push this repo to GitHub.
+1. Push this repo to GitHub (see above).
 2. Import the project at [vercel.com](https://vercel.com) → Framework **Vite**, output directory **`dist`**.
 3. Open the deployed HTTPS URL on your phone.
 
