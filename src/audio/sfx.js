@@ -1,6 +1,12 @@
 /**
  * One-shot SFX — files live in public/audio/sfx/{id}.ogg (see docs/sfx-bible.md).
  * Missing files fail silently until assets are delivered.
+ *
+ * Audio elements are created lazily on first play (inside the originating
+ * user-gesture chain) — mirroring themeMusic.js. The old mass-preload of 105
+ * HTMLAudioElement instances exhausted the mobile decoder pool on iOS Safari
+ * and Android Chrome, leaving the borrowed elements stalled so .play()
+ * silently rejected (see commit message for full root cause).
  */
 
 import { getMusicMuted } from "./themeMusic.js";
@@ -51,52 +57,40 @@ export const SFX_IDS = [
 ];
 
 let unlocked = false;
-let preloaded = false;
 const pool = new Map();
 
 export function unlockSfx() {
   unlocked = true;
-  preloadSfx();
+}
+
+/** Kept for backwards compat; no-op since we now create audio lazily. */
+export function preloadSfx() {
+  /* lazy creation — see nextAudio() */
 }
 
 function srcFor(id) {
   return `${SFX_BASE}${id}.ogg`;
 }
 
-function borrowAudio(id) {
-  const src = srcFor(id);
-  let list = pool.get(src);
+function nextAudio(id) {
+  let list = pool.get(id);
   if (!list) {
     list = [];
-    pool.set(src, list);
+    pool.set(id, list);
   }
-  let audio = list.find((a) => a.paused || a.ended);
-  if (!audio) {
-    audio = new Audio(src);
-    audio.volume = SFX_VOL;
-    audio.preload = "auto";
-    list.push(audio);
-    if (list.length > 8) list.shift();
+  for (const a of list) {
+    if (a.paused || a.ended) return a;
   }
-  return audio;
-}
-
-/** Warm the pool so mobile does not decode on first swing. */
-export function preloadSfx() {
-  if (preloaded) return;
-  preloaded = true;
-  for (const id of SFX_IDS) {
-    const src = srcFor(id);
-    for (let i = 0; i < POOL_PER_ID; i++) {
-      const audio = new Audio(src);
-      audio.volume = 0.001;
-      audio.preload = "auto";
-      audio.load();
-      const list = pool.get(src) ?? [];
-      list.push(audio);
-      pool.set(src, list);
-    }
+  if (list.length < POOL_PER_ID) {
+    const a = new Audio(srcFor(id));
+    a.preload = "auto";
+    a.volume = SFX_VOL;
+    list.push(a);
+    return a;
   }
+  const a = list.shift();
+  list.push(a);
+  return a;
 }
 
 /**
@@ -105,9 +99,9 @@ export function preloadSfx() {
 export function playSfx(id) {
   if (!unlocked || getMusicMuted() || !id) return;
   try {
-    const audio = borrowAudio(id);
-    audio.volume = SFX_VOL;
+    const audio = nextAudio(id);
     audio.muted = false;
+    audio.volume = SFX_VOL;
     audio.currentTime = 0;
     const p = audio.play();
     if (p?.catch) p.catch(() => {});
