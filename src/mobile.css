@@ -35,6 +35,22 @@ button,
   touch-action: pan-y;
 }
 
+/* Desktop: give the sides a styled background so the narrow game column
+   looks intentional rather than floating in flat black void.             */
+@media (min-width: 600px) {
+  body {
+    background: radial-gradient(ellipse at 50% 35%, #16132e 0%, #07060f 65%);
+  }
+
+  #root {
+    max-width: 440px;
+    margin: 0 auto;
+    border-left: 1px solid rgba(255, 255, 255, 0.04);
+    border-right: 1px solid rgba(255, 255, 255, 0.04);
+    box-shadow: 0 0 90px rgba(0, 255, 153, 0.07);
+  }
+}
+
 @media (max-width: 480px) {
   .class-select-card {
     padding: 10px 12px !important;
