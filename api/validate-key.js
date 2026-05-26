@@ -1,8 +1,13 @@
 import { SignJWT } from "jose";
 import { json, readJsonBody } from "./_lib/http.js";
+import { checkRateLimit, isAllowedOrigin } from "./_lib/ratelimit.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+  if (!isAllowedOrigin(req)) return json(res, 403, { error: "forbidden_origin" });
+
+  const rl = await checkRateLimit("validateKey", req);
+  if (!rl.ok) return json(res, 429, { error: "rate_limited" });
 
   const apiKey = process.env.LEMON_SQUEEZY_API_KEY;
   const secret = process.env.JWT_SECRET;
@@ -18,7 +23,9 @@ export default async function handler(req, res) {
   }
 
   const licenseKey = String(body.license_key || "").trim();
-  if (!licenseKey) return json(res, 400, { error: "missing_key" });
+  if (!licenseKey || licenseKey.length > 200) {
+    return json(res, 400, { error: "missing_key" });
+  }
 
   const storeId = process.env.LEMON_STORE_ID;
   const lsRes = await fetch("https://api.lemonsqueezy.com/v1/licenses/validate", {

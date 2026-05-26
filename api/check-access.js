@@ -1,11 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 import { jwtVerify } from "jose";
 import { json } from "./_lib/http.js";
+import { checkRateLimit } from "./_lib/ratelimit.js";
 
 export default async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "POST") {
     return json(res, 405, { error: "method_not_allowed" });
   }
+
+  const rl = await checkRateLimit("checkAccess", req);
+  if (!rl.ok) return json(res, 429, { error: "rate_limited" });
 
   const url = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

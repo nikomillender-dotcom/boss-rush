@@ -20,6 +20,8 @@
   "dependencies": {
     "@fontsource/press-start-2p": "^5.2.5",
     "@supabase/supabase-js": "^2.106.2",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.38.0",
     "jose": "^6.2.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

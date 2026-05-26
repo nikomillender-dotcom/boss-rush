@@ -1,9 +1,13 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { json } from "./_lib/http.js";
+import { checkRateLimit } from "./_lib/ratelimit.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+
+  const rl = await checkRateLimit("checkout", req);
+  if (!rl.ok) return json(res, 429, { error: "rate_limited" });
 
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   const priceId = process.env.STRIPE_PRICE_ID;

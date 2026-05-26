@@ -4,6 +4,13 @@ dist
 *.local
 .cursor
 
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+!.env.example
+
 .vercel
 tools/_kenney-*.zip
 tools/_jingles_extract/

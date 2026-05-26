@@ -1,8 +1,13 @@
 import { jwtVerify } from "jose";
 import { json, readJsonBody } from "./_lib/http.js";
+import { checkRateLimit, isAllowedOrigin } from "./_lib/ratelimit.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+  if (!isAllowedOrigin(req)) return json(res, 403, { error: "forbidden_origin" });
+
+  const rl = await checkRateLimit("checkLicense", req);
+  if (!rl.ok) return json(res, 429, { error: "rate_limited" });
 
   const secret = process.env.JWT_SECRET;
   if (!secret) return json(res, 503, { error: "not_configured" });
