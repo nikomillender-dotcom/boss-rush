@@ -4242,34 +4242,145 @@ function ShopSection({ title, children }) {
     <div
       style={{
         background: "#0c0c18",
-        border: "1px solid #2a2a4a",
-        borderRadius: 8,
+        border: "1px solid #1f1f33",
+        borderRadius: 6,
         overflow: "hidden",
       }}
     >
       <div
         style={{
-          padding: "8px 12px",
+          padding: "6px 10px",
           background: "#10102a",
           color: COLORS.fight,
           fontFamily: "'Press Start 2P', monospace",
-          fontSize: 8,
+          fontSize: 7,
           textAlign: "left",
-          borderBottom: "1px solid #2a2a4a",
+          borderBottom: "1px solid #1f1f33",
         }}
       >
         {title}
       </div>
       <div
         style={{
-          padding: 10,
+          padding: 8,
           display: "flex",
           flexDirection: "column",
-          gap: 6,
+          gap: 4,
         }}
       >
         {children}
       </div>
+    </div>
+  );
+}
+
+/** Thin level bar (mirrors HpBar gradient style for visual consistency). */
+function LevelBar({ level, max, color = "green" }) {
+  const safeMax = max > 0 ? max : 1;
+  const pct = Math.min(100, Math.round((level / safeMax) * 100));
+  const palette = {
+    green: { bg: "#001400", border: "#103010", grad: "linear-gradient(90deg,#006600,#00cc44)" },
+    red: { bg: "#1a0500", border: "#3a1a10", grad: "linear-gradient(90deg,#7a2200,#dd5522)" },
+    blue: { bg: "#000a1a", border: "#10203a", grad: "linear-gradient(90deg,#003366,#3388dd)" },
+    purple: { bg: "#0a0014", border: "#221038", grad: "linear-gradient(90deg,#4a0080,#aa44ee)" },
+  };
+  const p = palette[color] ?? palette.green;
+  return (
+    <div
+      style={{
+        height: 6,
+        background: p.bg,
+        borderRadius: 3,
+        border: `1px solid ${p.border}`,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          height: "100%",
+          width: `${pct}%`,
+          background: p.grad,
+          borderRadius: 3,
+          transition: "width 0.4s ease",
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Compact upgrade row: icon | label + level bar | buy chip.
+ * Single-line, ~32 px tall — fits HP/ATK/DEF and skill upgrades in the same shape.
+ */
+function StatRow({ icon, label, level, max, price, onBuy, disabled, maxed, sub, color }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "16px 1fr auto",
+        gap: 8,
+        alignItems: "center",
+        padding: "6px 8px",
+        background: "#0a0a14",
+        border: "1px solid #1a1a28",
+        borderRadius: 5,
+      }}
+    >
+      <div style={{ fontSize: 12, textAlign: "center" }}>{icon}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 7,
+            color: COLORS.text,
+            gap: 6,
+          }}
+        >
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {label}
+          </span>
+          <span style={{ fontSize: 6, color: COLORS.muted, flexShrink: 0 }}>
+            {level}/{max}
+          </span>
+        </div>
+        <LevelBar level={level} max={max} color={color} />
+        {sub && (
+          <div
+            style={{
+              fontSize: 6,
+              color: "#666",
+              marginTop: 2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {sub}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onBuy}
+        disabled={disabled || maxed}
+        style={{
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 7,
+          padding: "6px 8px",
+          borderRadius: 4,
+          cursor: disabled || maxed ? "not-allowed" : "pointer",
+          border: `1px solid ${disabled || maxed ? "#1a1a22" : COLORS.fightBorder}`,
+          background: disabled || maxed ? "#0a0a14" : `${COLORS.fight}22`,
+          color: maxed ? COLORS.dimmed : disabled ? COLORS.dimmed : COLORS.fight,
+          minWidth: 56,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {maxed ? "MAX" : `+${price}💰`}
+      </button>
     </div>
   );
 }
@@ -4299,20 +4410,11 @@ function ShopScreen({
   const shopMaxBoost = getShopMaxBoost(classKey);
   const shopMaxSkill = getShopMaxSkillLevel(classKey);
 
-  const btnStyle = (enabled) => ({
-    fontFamily: "'Press Start 2P', monospace",
-    fontSize: 8,
-    padding: "8px 10px",
-    borderRadius: 5,
-    cursor: enabled ? "pointer" : "not-allowed",
-    border: `1px solid ${enabled ? COLORS.fightBorder : "#1a1a22"}`,
-    background: enabled ? `${COLORS.fight}22` : "#0a0a14",
-    color: enabled ? COLORS.fight : COLORS.dimmed,
-    width: "100%",
-    textAlign: "left",
-  });
-
   const skillBases = isCombo ? getComboSkillBases(classKey) : CLASSES[classKey].skills;
+  const boostsTitle = isCombo ? t("shop.comboUpgrades") : t("shop.permanentBoosts");
+  const hpPrice = priceMult(SHOP_CONFIG.hpPrice(classMeta?.hpBoost ?? 0));
+  const atkPrice = priceMult(SHOP_CONFIG.atkPrice(classMeta?.atkBoost ?? 0));
+  const defPrice = priceMult(SHOP_CONFIG.defPrice(classMeta?.defBoost ?? 0));
 
   return (
     <div
@@ -4324,167 +4426,151 @@ function ShopScreen({
         width: "100%",
         display: "flex",
         flexDirection: "column",
-        gap: 8,
+        gap: 6,
         animation: "fadeUp 0.4s ease",
+        paddingTop: "max(8px, env(safe-area-inset-top))",
+        paddingBottom: "max(8px, env(safe-area-inset-bottom))",
       }}
     >
-      <div style={{ textAlign: "center" }}>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
-          <CharacterSprite
-            src={CLASS_SPRITES[spriteKeyForClass(classKey)]?.box}
-            fallbackIcon={classDef.icon}
-            size={48}
-            dead={false}
-          />
+      {/* Sticky header: sprite + class name + wallet */}
+      <div
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          display: "grid",
+          gridTemplateColumns: "auto 1fr auto",
+          alignItems: "center",
+          gap: 10,
+          padding: "8px 10px",
+          background: "rgba(10,10,18,0.96)",
+          borderBottom: "1px solid #1f1f33",
+          borderRadius: 6,
+        }}
+      >
+        <CharacterSprite
+          src={CLASS_SPRITES[spriteKeyForClass(classKey)]?.box}
+          fallbackIcon={classDef.icon}
+          size={32}
+          dead={false}
+        />
+        <div style={{ fontSize: 8, color: COLORS.fight, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {classDef.name}
         </div>
-        <div style={{ fontSize: 11, color: COLORS.fight }}>
-          {t("shop.classCamp", { name: classDef.name, camp: t("shop.camp") })}
-        </div>
-        <div style={{ fontSize: 10, color: COLORS.gold, marginTop: 8 }}>
-          💰 {t("shop.walletCoins", { amount: wallet.toLocaleString() })}
+        <div style={{ fontSize: 8, color: COLORS.gold, whiteSpace: "nowrap" }}>
+          💰 {wallet.toLocaleString()}
         </div>
       </div>
 
-      {isCombo && innate && classMeta && (
-        <>
-          <div
-            style={{
-              fontSize: 7,
-              color: COLORS.muted,
-              lineHeight: 2,
-              padding: 12,
-              background: "#0c0c18",
-              border: "1px solid #2a2a4a",
-              borderRadius: 8,
-            }}
-          >
-            {t("shop.comboInnate", { parents: comboParentLabel(classKey), mult: innate.weaponMult.toFixed(2) })}
-            <br />
-            {t("stat.hp")} {innate.maxHp} · {t("stat.atk")} {innate.attack} · {t("stat.def")}{" "}
-            {innate.defense}
-          </div>
-          <ShopSection title={t("shop.comboUpgrades")}>
-            <button
-              type="button"
-              disabled={
-                classMeta.hpBoost >= shopMaxBoost ||
-                wallet < priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))
-              }
-              onClick={onBuyHp}
-              style={btnStyle(
-                classMeta.hpBoost < shopMaxBoost &&
-                  wallet >= priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))
-              )}
-            >
-              ❤️ {t("stat.maxHp")} +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/
-              {shopMaxBoost}) {priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))}💰
-            </button>
-            <button
-              type="button"
-              disabled={
-                classMeta.atkBoost >= shopMaxBoost ||
-                wallet < priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))
-              }
-              onClick={onBuyAtk}
-              style={btnStyle(
-                classMeta.atkBoost < shopMaxBoost &&
-                  wallet >= priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))
-              )}
-            >
-              ⚔️ {t("stat.attack")} +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/
-              {shopMaxBoost}) {priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))}💰
-            </button>
-            <button
-              type="button"
-              disabled={
-                classMeta.defBoost >= shopMaxBoost ||
-                wallet < priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))
-              }
-              onClick={onBuyDef}
-              style={btnStyle(
-                classMeta.defBoost < shopMaxBoost &&
-                  wallet >= priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))
-              )}
-            >
-              🛡️ {t("stat.defense")} +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/
-              {shopMaxBoost}) {priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))}💰
-            </button>
-          </ShopSection>
-        </>
+      {isCombo && innate && (
+        <div
+          style={{
+            fontSize: 6,
+            color: COLORS.muted,
+            lineHeight: 1.5,
+            padding: 8,
+            background: "#0c0c18",
+            border: "1px solid #1f1f33",
+            borderRadius: 6,
+          }}
+        >
+          {t("shop.comboInnate", { parents: comboParentLabel(classKey), mult: innate.weaponMult.toFixed(2) })}
+          <br />
+          {t("stat.hp")} {innate.maxHp} · {t("stat.atk")} {innate.attack} · {t("stat.def")} {innate.defense}
+        </div>
       )}
 
-      {!isCombo && classMeta && (
-        <>
-          <ShopSection title={t("shop.permanentBoosts")}>
-            <button
-              type="button"
-              disabled={classMeta.hpBoost >= shopMaxBoost || wallet < SHOP_CONFIG.hpPrice(classMeta.hpBoost)}
-              onClick={onBuyHp}
-              style={btnStyle(
-                classMeta.hpBoost < shopMaxBoost &&
-                  wallet >= SHOP_CONFIG.hpPrice(classMeta.hpBoost)
-              )}
-            >
-              ❤️ {t("stat.maxHp")} +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{shopMaxBoost}){" "}
-              {SHOP_CONFIG.hpPrice(classMeta.hpBoost)}💰
-            </button>
-            <button
-              type="button"
-              disabled={classMeta.atkBoost >= shopMaxBoost || wallet < SHOP_CONFIG.atkPrice(classMeta.atkBoost)}
-              onClick={onBuyAtk}
-              style={btnStyle(
-                classMeta.atkBoost < shopMaxBoost &&
-                  wallet >= SHOP_CONFIG.atkPrice(classMeta.atkBoost)
-              )}
-            >
-              ⚔️ {t("stat.attack")} +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{shopMaxBoost}){" "}
-              {SHOP_CONFIG.atkPrice(classMeta.atkBoost)}💰
-            </button>
-            <button
-              type="button"
-              disabled={classMeta.defBoost >= shopMaxBoost || wallet < SHOP_CONFIG.defPrice(classMeta.defBoost)}
-              onClick={onBuyDef}
-              style={btnStyle(
-                classMeta.defBoost < shopMaxBoost &&
-                  wallet >= SHOP_CONFIG.defPrice(classMeta.defBoost)
-              )}
-            >
-              🛡️ {t("stat.defense")} +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{shopMaxBoost}){" "}
-              {SHOP_CONFIG.defPrice(classMeta.defBoost)}💰
-            </button>
-          </ShopSection>
-        </>
+      {classMeta && (
+        <ShopSection title={boostsTitle}>
+          <StatRow
+            icon="❤️"
+            label={t("stat.maxHp")}
+            level={classMeta.hpBoost}
+            max={shopMaxBoost}
+            price={hpPrice}
+            onBuy={onBuyHp}
+            disabled={wallet < hpPrice}
+            maxed={classMeta.hpBoost >= shopMaxBoost}
+            color="green"
+          />
+          <StatRow
+            icon="⚔️"
+            label={t("stat.attack")}
+            level={classMeta.atkBoost}
+            max={shopMaxBoost}
+            price={atkPrice}
+            onBuy={onBuyAtk}
+            disabled={wallet < atkPrice}
+            maxed={classMeta.atkBoost >= shopMaxBoost}
+            color="red"
+          />
+          <StatRow
+            icon="🛡️"
+            label={t("stat.defense")}
+            level={classMeta.defBoost}
+            max={shopMaxBoost}
+            price={defPrice}
+            onBuy={onBuyDef}
+            disabled={wallet < defPrice}
+            maxed={classMeta.defBoost >= shopMaxBoost}
+            color="blue"
+          />
+        </ShopSection>
       )}
 
       {classMeta && weapons.length > 0 && (
         <ShopSection title={t("shop.weapons")}>
-          {weapons.map((w) => {
-            const owned = classMeta.ownedWeaponIds.includes(w.id);
-            const equipped = w.id === equippedId;
-            const canBuy = !owned && wallet >= w.price;
-            const label = equipped
-              ? t("shop.equipped")
-              : owned
-                ? t("shop.equip")
-                : w.price === 0
-                  ? t("shop.free")
-                  : `${w.price}💰`;
-            return (
-              <button
-                key={w.id}
-                type="button"
-                disabled={!owned && !canBuy}
-                onClick={() => onBuyWeapon(w.id)}
-                style={{
-                  ...btnStyle(owned || canBuy),
-                  borderColor: equipped ? COLORS.gold : btnStyle(owned || canBuy).border,
-                }}
-              >
-                {w.name} (x{w.attackMult} {t("stat.atkShort")}) {label}
-                <div style={{ fontSize: 6, color: "#666", marginTop: 4 }}>{w.description}</div>
-              </button>
-            );
-          })}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 4,
+            }}
+          >
+            {weapons.map((w) => {
+              const owned = classMeta.ownedWeaponIds.includes(w.id);
+              const equipped = w.id === equippedId;
+              const canBuy = !owned && wallet >= w.price;
+              const enabled = owned || canBuy;
+              const badge = equipped
+                ? t("shop.equipped")
+                : owned
+                  ? t("shop.equip")
+                  : w.price === 0
+                    ? t("shop.free")
+                    : `${w.price}💰`;
+              return (
+                <button
+                  key={w.id}
+                  type="button"
+                  disabled={!enabled}
+                  onClick={() => onBuyWeapon(w.id)}
+                  style={{
+                    fontFamily: "'Press Start 2P', monospace",
+                    fontSize: 7,
+                    padding: "6px 8px",
+                    borderRadius: 5,
+                    cursor: enabled ? "pointer" : "not-allowed",
+                    border: `1px solid ${equipped ? COLORS.gold : enabled ? COLORS.fightBorder : "#1a1a22"}`,
+                    background: enabled ? `${COLORS.fight}22` : "#0a0a14",
+                    color: enabled ? COLORS.fight : COLORS.dimmed,
+                    textAlign: "left",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 3,
+                    minHeight: 44,
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {w.name}
+                  </span>
+                  <span style={{ fontSize: 6, color: equipped ? COLORS.gold : "#888" }}>
+                    x{w.attackMult} {t("stat.atkShort")} · {badge}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </ShopSection>
       )}
 
@@ -4498,32 +4584,76 @@ function ShopScreen({
               ? priceMult(SHOP_CONFIG.skillPrice(level))
               : SHOP_CONFIG.skillPrice(level);
             const canBuy = !maxed && wallet >= price;
+            const sub = !maxed
+              ? `${t("shop.next")} ${describeSkillUpgrade(rawBase, level + 1, previewAttack, classKey)}`
+              : null;
             return (
-              <button
+              <StatRow
                 key={rawBase.id}
-                type="button"
+                icon={base.icon}
+                label={base.name}
+                level={level}
+                max={shopMaxSkill}
+                price={price}
+                onBuy={() => onBuySkill(rawBase.id)}
                 disabled={!canBuy}
-                onClick={() => onBuySkill(rawBase.id)}
-                style={btnStyle(canBuy)}
-              >
-                {base.icon} {base.name} Lv.{level}/{shopMaxSkill}
-                {!maxed && (
-                  <div style={{ fontSize: 6, color: "#666", marginTop: 4 }}>
-                    {t("shop.next")} {describeSkillUpgrade(rawBase, level + 1, previewAttack, classKey)} {price}💰
-                  </div>
-                )}
-              </button>
+                maxed={maxed}
+                sub={sub}
+                color="purple"
+              />
             );
           })}
         </ShopSection>
       )}
 
-      <button type="button" onClick={onStart} style={{ ...btnStyle(true), textAlign: "center", fontSize: 10 }}>
-        {t("shop.start")}
-      </button>
-      <button type="button" onClick={onBack} style={{ ...btnStyle(true), textAlign: "center", color: COLORS.muted }}>
-        {t("shop.back")}
-      </button>
+      {/* Sticky footer: START + Back */}
+      <div
+        style={{
+          position: "sticky",
+          bottom: 0,
+          zIndex: 5,
+          marginTop: "auto",
+          display: "grid",
+          gridTemplateColumns: "1fr auto",
+          gap: 6,
+          padding: "8px 6px 4px",
+          background: "linear-gradient(180deg, transparent, rgba(10,10,18,0.96) 30%)",
+        }}
+      >
+        <button
+          type="button"
+          onClick={onStart}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 10,
+            padding: "12px 18px",
+            borderRadius: 5,
+            cursor: "pointer",
+            border: `2px solid ${COLORS.fightBorder}`,
+            background: `${COLORS.fight}22`,
+            color: COLORS.fight,
+            letterSpacing: 1,
+          }}
+        >
+          {t("shop.start")}
+        </button>
+        <button
+          type="button"
+          onClick={onBack}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 7,
+            padding: "12px 14px",
+            borderRadius: 5,
+            cursor: "pointer",
+            border: "1px solid #2a2a3a",
+            background: "transparent",
+            color: COLORS.muted,
+          }}
+        >
+          {t("shop.back")}
+        </button>
+      </div>
     </div>
   );
 }
