@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { t } from "./i18n/index.js";
 
 const DISMISS_ANDROID = "bossRush_installDismiss_android";
 const DISMISS_IOS = "bossRush_installDismiss_ios";
@@ -59,9 +60,7 @@ export default function InstallBanner() {
 
   if (dismissed || isStandalone()) return null;
 
-  const message = iosHint
-    ? "Install: tap Share, then Add to Home Screen"
-    : "Install Boss Rush on this device";
+  const message = iosHint ? t("install.iosHint") : t("install.androidMessage");
 
   return (
     <div
@@ -101,13 +100,13 @@ export default function InstallBanner() {
             cursor: "pointer",
           }}
         >
-          Install
+          {t("install.button")}
         </button>
       )}
       <button
         type="button"
         onClick={dismiss}
-        aria-label="Dismiss"
+        aria-label={t("install.dismissAria")}
         style={{
           fontFamily: "inherit",
           fontSize: 10,

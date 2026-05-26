@@ -1,6 +1,6 @@
 # Steam store copy — Boss Rush
 
-**Status:** Draft for when you open Steamworks. PWA stays free at https://boss-rush-six.vercel.app  
+**Status:** Draft for when you open Steamworks. Web demo stays free through floor 100 at https://boss-rush-six.vercel.app (full unlock sold on site).  
 **Suggested price band:** $2.99–$4.99 (recommend **$3.99** at launch)
 
 ---

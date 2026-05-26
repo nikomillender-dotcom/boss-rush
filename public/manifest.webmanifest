@@ -1,6 +1,6 @@
 {
-  "name": "Boss Rush",
-  "short_name": "BossRush",
+  "name": "Meow Rush: Gauntlet",
+  "short_name": "Meow Rush",
   "description": "Turn-based cat-vs-dog gauntlet",
   "start_url": "/",
   "display": "standalone",

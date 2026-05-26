@@ -1,5 +1,7 @@
 # Cat class sprites
 
+Full art spec: [`docs/sprite-style-guide.md`](../../../docs/sprite-style-guide.md).
+
 Vite serves `public/` at `/sprites/cats/...`.
 
 ## Layout

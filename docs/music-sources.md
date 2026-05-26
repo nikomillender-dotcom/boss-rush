@@ -1,49 +1,76 @@
-# Boss Rush — music sources
+# Meow Rush — music sources
 
-All shipped BGM is **CC0** from [Kenney Music Loops](https://kenney.nl/assets/music-loops), mirrored at [gamesounds.xyz](https://www.gamesounds.xyz/?dir=Kenney%27s+Sound+Pack%2FMusic+Loops).
+Shipped BGM is a mix of **original chiptune loops** (UltraBox / Claude Cowork) and **CC0 Kenney** theme fallbacks.
 
 **Do not** use Final Fantasy or other copyrighted game rips.
 
-## Combat BGM (funk / phonk)
+## Custom tracks (primary)
 
-All fights use **`public/audio/battle.ogg`** when that file exists (overrides per-theme Kenney loops).
+| File | Scene / condition |
+|------|-------------------|
+| `start.ogg` | Title screen only |
+| `camp.ogg` | Shop + class select |
+| `battle.ogg` | Most combat |
+| `boss.ogg` | Every 10th floor + mega boss (`isBossRound`) |
+| `themes/hell.ogg` | Hell theme floors (201–300) |
+| `doggod.ogg` or `doggod.wav` | Floor 1000 capstone |
 
-```bash
-npm run music:battle
-```
+Layer order in [`src/audio/themeMusic.js`](../src/audio/themeMusic.js): **doggod → boss (manual only) → hell theme → battle → Kenney theme**.
 
-This downloads a **CC0 funk loop** from OpenGameArt (not copyrighted viral Brazilian phonk). For a phonk vibe you control, export a **royalty-free** track (e.g. [Pixabay phonk license](https://pixabay.com/music/)) to `public/audio/battle.ogg` and list it in `CREDITS.txt`.
+### AUTO mode
 
-Camp / title / shop still use `camp.ogg`.
+When **AUTO is on**, `boss.ogg` is skipped so rapid boss floors do not flip tracks and restart. **Doggod** (floor 1000) and **hell** theme tracks still apply. When **AUTO is off**, every `isBossRound` floor uses `boss.ogg` if present.
 
-## Regenerate theme files
+### Title music
+
+`start.ogg` plays on the title screen after the first tap or key press (browser autoplay policy). Shop and class select use `camp.ogg` only.
+
+### Loop seams
+
+Custom loops use a short tail trim in code (~0.06–0.08s before the file end) to reduce clicks. For seamless loops, re-export from UltraBox with aligned zero-crossings at the loop point.
+
+## Kenney fallbacks
+
+Remaining `public/audio/themes/*.ogg` files are CC0 Kenney loops used only when no custom battle track applies and the layered resolver falls through to the theme id.
+
+Regenerate Kenney files:
 
 ```bash
 npm run music:themes
 ```
 
-This runs `tools/prepare-theme-music.mjs`, which downloads OGG loops into `public/audio/` and refreshes `CREDITS.txt` and `public/CREDITS.txt`.
+**Warning:** `music:themes` overwrites `camp.ogg` and `themes/hell.ogg` with Kenney defaults. Back up custom files first.
 
-## Theme → track mapping
+## Optional scripts
 
-| File | Kenney track |
-|------|----------------|
-| `camp.ogg` | Farm Frolics |
-| `themes/human.ogg` | Retro Beat |
-| `themes/monster.ogg` | Retro Mystic |
-| `themes/hell.ogg` | Sad Descent |
-| `themes/space.ogg` | Space Cadet |
-| `themes/alien.ogg` | German Virtue |
-| `themes/mirror.ogg` | Retro Comedy |
-| `themes/heaven_low.ogg` | Night at the Beach |
-| `themes/olympus.ogg` | Mission Plausible |
-| `themes/pantheon.ogg` | Flowing Rocks |
-| `themes/angelic.ogg` | Alpha Dance |
+```bash
+npm run music:battle   # CC0 funk MP3 fallback (superseded by battle.ogg)
+npm run music:doggod   # doggod.wav → doggod.ogg (needs ffmpeg)
+```
 
-Full per-file license lines: [CREDITS.txt](../CREDITS.txt).
+## Sound effects (SFX)
+
+One-shots in `public/audio/sfx/{id}.ogg`. Wired in `src/audio/sfx.js`; triggered from `BossRush.jsx`. Respects the same mute flag as BGM (`bossRush_muted`).
+
+- Spec for Claude: [sfx-bible.md](sfx-bible.md)
+- Handoff checklist: [claude-sfx-handoff.md](claude-sfx-handoff.md)
+- Verify: `npm run sfx:verify`
+
+Until OGG files exist, SFX calls no-op silently.
 
 ## In-game wiring
 
-- Module: `src/audio/themeMusic.js`
-- Scene hooks: `BossRush.jsx` (`playCampMusic` / `playThemeForRound` / mute toggle)
-- PWA precache: `vite.config.js` includes `*.ogg`
+- BGM: `src/audio/themeMusic.js`
+- SFX: `src/audio/sfx.js`
+- Scenes: `BossRush.jsx` — `playTitleMusic` (title), `playCampMusic` (shop/select), `playThemeForRound` (battle)
+- PWA precache: `vite.config.js` includes `*.ogg`, `*.mp3`, `*.wav`
+
+## Licensing summary
+
+| Source | Safe for Meow Rush? |
+|--------|---------------------|
+| Custom UltraBox originals in `public/audio/` | Yes (document in CREDITS.txt) |
+| Kenney / OpenGameArt CC0 | Yes |
+| Viral phonk / TikTok edits | No |
+
+Full per-file lines: [CREDITS.txt](../CREDITS.txt).

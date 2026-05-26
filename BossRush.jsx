@@ -24,11 +24,18 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   unlockAudio,
   playCampMusic,
+  playTitleMusic,
   playThemeForRound,
   stopAllMusic,
   getMusicMuted,
   setMusicMuted,
 } from "./src/audio/themeMusic.js";
+import {
+  unlockSfx,
+  playSfx,
+  playCombatImpact,
+  sfxForSkill,
+} from "./src/audio/sfx.js";
 import {
   SCALING_CONFIG,
   isBossRound,
@@ -67,6 +74,42 @@ import {
 } from "./src/battle/ff1TurnResolver.js";
 import { t, setLocale } from "./src/i18n/index.js";
 import {
+  DEMO_MAX_FLOOR,
+  LEMON_CHECKOUT_URL,
+  STRIPE_ENABLED,
+} from "./src/access/constants.js";
+import {
+  getAccessMode,
+  setServerPurchased,
+  hasServerPurchaseFlag,
+} from "./src/access/accessMode.js";
+import { validateLicenseKey } from "./src/access/validateLicense.js";
+import {
+  isBaseClassUnlockedForAccess,
+  baseClassUnlockHintForAccess,
+  shouldShowDemoHudBanner,
+  shouldShowFloor10Tease,
+  demoFloorsRemaining,
+} from "./src/access/demoGates.js";
+import {
+  attachSaveChecksum,
+  verifySaveIntegrity,
+} from "./src/access/saveIntegrity.js";
+import { getSupabase, isSupabaseConfigured } from "./src/access/supabaseClient.js";
+import {
+  scheduleCloudSync,
+  fetchCloudSaveIfNewer,
+} from "./src/access/cloudSave.js";
+import { startStripeCheckout, refreshSupabaseAccess } from "./src/access/checkout.js";
+import { trackEvent, ANALYTICS } from "./src/access/analytics.js";
+import PaywallScreen from "./src/components/PaywallScreen.jsx";
+import LicenseKeyModal from "./src/components/LicenseKeyModal.jsx";
+import AuthPanel from "./src/components/AuthPanel.jsx";
+import BattleTutorialOverlay, {
+  hasSeenBattleTutorial,
+  markBattleTutorialSeen,
+} from "./src/BattleTutorial.jsx";
+import {
   resolveEnemyTemplate,
   buildEnemyFromCatalog,
   getCatalogEntry,
@@ -77,6 +120,10 @@ import {
   getAllEnemySpriteKeys,
   FREE_PLAY_START,
 } from "./src/content/enemyThemes.js";
+
+function debugLog() {
+  // intentionally empty: leftover agent telemetry sink
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURATION — tweak these to balance the game
@@ -112,7 +159,7 @@ const GAME_CONFIG = {
   fireMeltBonus: 1.1,
 
   // Timing (ms) — multiplied by 1 / battleSpeedMultiplier in combat
-  enemyTurnDelay: 900,
+  enemyTurnDelay: 650,
   victoryDelay: 1600,
   deathDelay: 1200,
   winToEnemyTurn: 350,
@@ -305,15 +352,18 @@ function getAccountBestFloor(save) {
   return best;
 }
 
-function isBaseClassUnlocked(save, classKey) {
-  const need = BASE_CLASS_UNLOCK_FLOOR[classKey] ?? 0;
-  return getAccountBestFloor(save) >= need;
+function isBaseClassUnlocked(save, classKey, accessMode = "demo") {
+  return isBaseClassUnlockedForAccess(save, classKey, accessMode);
 }
 
-function baseClassUnlockHint(classKey) {
-  const need = BASE_CLASS_UNLOCK_FLOOR[classKey] ?? 0;
-  if (need <= 0) return "";
-  return t("select.classUnlock", { floor: need, name: getLocalizedClass(classKey).name });
+function baseClassUnlockHint(save, classKey, accessMode = "demo") {
+  return baseClassUnlockHintForAccess(
+    save,
+    classKey,
+    accessMode,
+    t,
+    getLocalizedClass
+  );
 }
 
 const SHOP_CONFIG = {
@@ -413,18 +463,18 @@ const CLASSES = {
     skills: [
       {
         id: "power_strike",
-        name: "Power Strike",
+        nameKey: "spell.powerStrike.name",
+        descKey: "spell.powerStrike.desc",
         icon: "💥",
-        description: "Deal 2.25× physical damage",
         cooldown: 3,
         type: "damage",
         multiplier: 2.25,
       },
       {
         id: "shield_wall",
-        name: "Shield Wall",
+        nameKey: "spell.shieldWall.name",
+        descKey: "spell.shieldWall.desc",
         icon: "🛡️",
-        description: "Strong block next hit & restore 2 HP",
         cooldown: 4,
         type: "heal_block",
         healAmount: 2,
@@ -432,9 +482,9 @@ const CLASSES = {
       },
       {
         id: "war_cry",
-        name: "War Cry",
+        nameKey: "spell.warCry.name",
+        descKey: "spell.warCry.desc",
         icon: "📯",
-        description: "+25% ATK & DEF for 2 player turns",
         cooldown: 5,
         type: "buff_war_cry",
       },
@@ -506,9 +556,9 @@ const CLASSES = {
     skills: [
       {
         id: "backstab",
-        name: "Backstab",
+        nameKey: "spell.backstab.name",
+        descKey: "spell.backstab.desc",
         icon: "🌑",
-        description: "3× guaranteed critical hit",
         cooldown: 2,
         type: "damage",
         multiplier: 3,
@@ -516,17 +566,17 @@ const CLASSES = {
       },
       {
         id: "smoke_bomb",
-        name: "Smoke Bomb",
+        nameKey: "spell.smokeBomb.name",
+        descKey: "spell.smokeBomb.desc",
         icon: "💨",
-        description: "Evade next enemy attack",
         cooldown: 3,
         type: "buff_dodge",
       },
       {
         id: "pickpocket",
-        name: "Pickpocket",
+        nameKey: "spell.pickpocket.name",
+        descKey: "spell.pickpocket.desc",
         icon: "💰",
-        description: "Heavy hit + steal coins",
         cooldown: 6,
         type: "damage_steal",
         damageBase: 2,
@@ -689,7 +739,7 @@ const SPRITE_CLASS_KEYS = [
 ];
 
 function catSpritePath(classKey, filename) {
-  return `/sprites/cats/${classKey}/${filename}`;
+  return `/sprites/cats/${classKey}/${filename}?v=${__BUILD_ID__}`;
 }
 
 const CLASS_SPRITES = Object.fromEntries(
@@ -741,13 +791,46 @@ function localizeSkillTemplate(baseSkill) {
   };
 }
 
-function localizeClassDef(classDef) {
-  if (!classDef?.nameKey) return classDef;
+const ATTACK_TYPE_ICONS = {
+  physical: "⚔️",
+  magical: "🔮",
+  sacred: "✝️",
+  hybrid: "⚔️",
+};
+
+function attackTypeLabel(attackType) {
+  if (!attackType) return "";
+  const icon = ATTACK_TYPE_ICONS[attackType] ?? "";
+  const label = t(`stat.attackType.${attackType}`);
+  return icon ? `${icon} ${label}` : label;
+}
+
+function localizeWeapon(weapon) {
+  if (!weapon) return weapon;
+  const nameKey = `weapon.${weapon.id}.name`;
+  const descKey = `weapon.${weapon.id}.desc`;
+  const name = t(nameKey);
+  const description = t(descKey);
   return {
-    ...classDef,
-    name: t(classDef.nameKey),
-    description: t(classDef.descKey),
+    ...weapon,
+    name: name === nameKey ? weapon.name : name,
+    description: description === descKey ? weapon.description : description,
   };
+}
+
+function localizeClassDef(classDef) {
+  if (!classDef) return classDef;
+  const localized = classDef.nameKey
+    ? {
+        ...classDef,
+        name: t(classDef.nameKey),
+        description: t(classDef.descKey),
+      }
+    : { ...classDef };
+  if (classDef.attackType) {
+    localized.attackLabel = attackTypeLabel(classDef.attackType);
+  }
+  return localized;
 }
 
 function getLocalizedClass(classKey) {
@@ -1046,8 +1129,13 @@ function loadSave() {
       }
       const merged = mergeMissingClassMetas(save);
       const synced = syncAllComboUnlocks(merged);
-      if (merged !== save) persistSave(synced);
-      return synced;
+      const checked = verifySaveIntegrity({
+        ...synced,
+        _saveChecksum: data._saveChecksum,
+      });
+      const safeSave = checked.save ?? synced;
+      if (merged !== save || !checked.ok) persistSave(safeSave);
+      return safeSave;
     }
   } catch {
     /* fall through to migration */
@@ -1072,16 +1160,18 @@ function loadSave() {
 }
 
 function persistSave(save) {
-  localStorage.setItem(META_SAVE_KEY, JSON.stringify(save));
-  return save;
+  const withChecksum = attachSaveChecksum(save);
+  localStorage.setItem(META_SAVE_KEY, JSON.stringify(withChecksum));
+  return withChecksum;
 }
 
 function getWeaponById(weaponId) {
-  return WEAPONS.find((w) => w.id === weaponId);
+  const w = WEAPONS.find((item) => item.id === weaponId);
+  return w ? localizeWeapon(w) : undefined;
 }
 
 function getWeaponsForClass(classKey) {
-  return WEAPONS.filter((w) => w.classKey === classKey);
+  return WEAPONS.filter((w) => w.classKey === classKey).map(localizeWeapon);
 }
 
 /** Apply shop skill levels to a base skill template. */
@@ -1125,33 +1215,35 @@ function applySkillLevels(baseSkill, level, playerAttack = 5) {
 }
 
 function describeSkillUpgrade(baseSkill, nextLevel, previewAttack = 5, classKey = "warrior") {
-  if (nextLevel > getShopMaxSkillLevel(classKey)) return "Max level";
+  if (nextLevel > getShopMaxSkillLevel(classKey)) return t("shop.maxLevel");
   const preview = applySkillLevels(baseSkill, nextLevel, previewAttack);
   const parts = [];
   if (preview.previewDamage != null) {
-    parts.push(`~${preview.previewDamage} dmg at ${previewAttack} ATK`);
+    parts.push(t("upgrade.previewDamage", { dmg: preview.previewDamage, atk: previewAttack }));
   }
   if (preview.multiplier != null && preview.multiplier !== baseSkill.multiplier) {
-    parts.push(`×${preview.multiplier.toFixed(1)}`);
+    parts.push(t("upgrade.multiplier", { mult: preview.multiplier.toFixed(1) }));
   }
   if (preview.healAmount != null) {
-    parts.push(`heal ${preview.healAmount}`);
+    parts.push(t("upgrade.heal", { amount: preview.healAmount }));
   }
   if (preview.previewAfterburn != null) {
-    parts.push(`afterburn ~${preview.previewAfterburn} (vs 50 HP)`);
+    parts.push(t("upgrade.afterburn", { dmg: preview.previewAfterburn }));
   }
   if (preview.cooldown < baseSkill.cooldown) {
-    parts.push(`Cooldown ${preview.cooldown}`);
+    parts.push(t("upgrade.cooldown", { cd: preview.cooldown }));
   }
   if (nextLevel === 5 || nextLevel === 10) {
-    parts.push("milestone Cooldown cut");
+    parts.push(t("upgrade.milestone"));
   }
-  if (preview.stealRange) parts.push(`steal ${preview.stealRange[0]}–${preview.stealRange[1]}`);
-  return parts.length ? parts.join(", ") : "Stronger effect";
+  if (preview.stealRange) {
+    parts.push(t("upgrade.steal", { min: preview.stealRange[0], max: preview.stealRange[1] }));
+  }
+  return parts.length ? parts.join(", ") : t("upgrade.stronger");
 }
 
 function dogSpritePath(spriteKey, filename) {
-  return `/sprites/dogs/${spriteKey}/${filename}`;
+  return `/sprites/dogs/${spriteKey}/${filename}?v=${__BUILD_ID__}`;
 }
 
 const ENEMY_SPRITES = Object.fromEntries(
@@ -1390,6 +1482,11 @@ function tickCooldowns(skills) {
 // All game logic lives here. Components just read state and call actions.
 // ═══════════════════════════════════════════════════════════════════════
 
+function unlockGameAudio() {
+  unlockAudio();
+  unlockSfx();
+}
+
 function useGameEngine() {
   const [save, setSave] = useState(() => {
     const loaded = loadSave();
@@ -1418,6 +1515,12 @@ function useGameEngine() {
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoPaused, setAutoPaused] = useState(false);
   const [battleSpeedIndex, setBattleSpeedIndex] = useState(0);
+  const [accessMode, setAccessMode] = useState(() => getAccessMode());
+  const [licenseModalOpen, setLicenseModalOpen] = useState(false);
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseError, setLicenseError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
 
   const allTimeRecords = save.records;
 
@@ -1465,6 +1568,30 @@ function useGameEngine() {
   autoEnabledRef.current = autoEnabled;
   autoPausedRef.current = autoPaused;
 
+  useEffect(() => {
+    setAccessMode(getAccessMode());
+    refreshAccessFromServer().catch(() => {});
+    const supabase = getSupabase();
+    if (!supabase) return undefined;
+    supabase.auth.getSession().then(({ data }) => {
+      setAuthEmail(data?.session?.user?.email || "");
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_evt, session) => {
+      setAuthEmail(session?.user?.email || "");
+      if (session?.user) {
+        refreshAccessFromServer().catch(() => {});
+        fetchCloudSaveIfNewer(saveRef.current)
+          .then((result) => {
+            if (result?.useCloud && result.save) {
+              commitSave(result.save);
+            }
+          })
+          .catch(() => {});
+      }
+    });
+    return () => listener?.subscription?.unsubscribe?.();
+  }, []);
+
   const battleSpeedMultiplier =
     GAME_CONFIG.battleSpeedOptions[battleSpeedIndex] ?? 1;
 
@@ -1476,7 +1603,21 @@ function useGameEngine() {
   /** Schedule a delayed action (automatically cleaned up) */
   const schedule = useCallback(
     (ms, fn) => {
-      const id = setTimeout(fn, scheduleMs(ms));
+      const scheduledAt = Date.now();
+      const adjustedMs = scheduleMs(ms);
+      const id = setTimeout(() => {
+        const drift = Date.now() - scheduledAt - adjustedMs;
+        if (drift > 120) {
+          debugLog("pre-fix", "H4", "BossRush.jsx:1623", "schedule-drift", {
+            ms,
+            adjustedMs,
+            drift,
+            scene: sceneRef.current,
+            turn: turnRef.current,
+          });
+        }
+        fn();
+      }, adjustedMs);
       timersRef.current.push(id);
       return id;
     },
@@ -1492,16 +1633,101 @@ function useGameEngine() {
   useEffect(() => () => clearAllTimers(), [clearAllTimers]);
 
   function commitSave(nextSave) {
-    persistSave(nextSave);
-    saveRef.current = nextSave;
-    setSave(nextSave);
-    return nextSave;
+    const persisted = persistSave(nextSave);
+    saveRef.current = persisted;
+    setSave(persisted);
+    if (getAccessMode() === "full") {
+      scheduleCloudSync(persisted);
+    }
+    return persisted;
   }
 
   function setLocalePreference(nextLocale) {
     const loc = nextLocale === "es" ? "es" : "en";
     setLocale(loc);
     commitSave({ ...saveRef.current, locale: loc });
+  }
+
+  async function submitLicenseKey(key) {
+    setLicenseBusy(true);
+    setLicenseError("");
+    try {
+      const result = await validateLicenseKey(key);
+      if (!result.ok) {
+        setLicenseError(result.error || "invalid");
+        return false;
+      }
+      setAccessMode("full");
+      trackEvent(ANALYTICS.LICENSE_SUCCESS, { source: scene });
+      return true;
+    } catch {
+      setLicenseError("invalid");
+      return false;
+    } finally {
+      setLicenseBusy(false);
+    }
+  }
+
+  async function refreshAccessFromServer() {
+    const purchased = await refreshSupabaseAccess().catch(() => false);
+    if (purchased) {
+      setServerPurchased(true);
+      setAccessMode("full");
+      const nextSave = { ...saveRef.current, purchased: true };
+      commitSave(nextSave);
+      return true;
+    }
+    if (hasServerPurchaseFlag()) {
+      setAccessMode("full");
+      return true;
+    }
+    setAccessMode(getAccessMode());
+    return false;
+  }
+
+  async function authSignIn(email, password) {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      setAuthEmail(email);
+      await refreshAccessFromServer();
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function authSignUp(email, password) {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) throw error;
+      setAuthEmail(email);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function authSignOut() {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setAuthEmail("");
+    setServerPurchased(false);
+    setAccessMode(getAccessMode());
+  }
+
+  async function buyWithStripe() {
+    setAuthBusy(true);
+    try {
+      await startStripeCheckout();
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   function addWallet(amount) {
@@ -1540,6 +1766,14 @@ function useGameEngine() {
   }
 
   function runAutoCommand() {
+    debugLog("pre-fix", "H2", "BossRush.jsx:1781", "auto-command-entry", {
+      turn: turnRef.current,
+      autoEnabled: autoEnabledRef.current,
+      autoPaused: autoPausedRef.current,
+      round: roundRef.current,
+      playerHp: playerRef.current?.hp,
+      enemyHp: enemyRef.current?.hp,
+    });
     if (turnRef.current !== "player") return;
     if (!autoEnabled || autoPaused) return;
 
@@ -1595,7 +1829,10 @@ function useGameEngine() {
       afterburnRef.current = null;
       addLogEntry(t("battle.afterburn", { damage: chip, name: nextEnemy.name }), "good");
     }
-    if (chip > 0) spawnFloat(`🔥−${chip}`, "enemy", "#ff6600");
+    if (chip > 0) {
+      playSfx("afterburn");
+      spawnFloat(`🔥−${chip}`, "enemy", "#ff6600");
+    }
     return { ...nextEnemy, hp };
   }
 
@@ -1607,12 +1844,18 @@ function useGameEngine() {
     setEnemy(nextEnemy);
 
     addLogEntry(`👁️ "${nextEnemy.lore}"`, "lore");
+
+    // SFX: theme sting > boss fanfare > normal whoosh (mutually exclusive priority)
     if (isThemeTransitionFloor(nextRound)) {
+      playSfx("theme_transition");
       const block = getThemeBlock(nextRound);
       if (block?.nameKey) {
         addLogEntry(t(block.nameKey), "lore");
       }
+    } else {
+      playSfx("floor_transition");
     }
+
     if (isFreePlayRound(nextRound) && nextRound === FREE_PLAY_START) {
       addLogEntry(t("theme.freeplay"), "system");
     }
@@ -1622,9 +1865,19 @@ function useGameEngine() {
       classKey &&
       !canAutoSkipBoss(saveRef.current, classKey, nextRound);
     if (showBossBanner) {
-      addLogEntry(`☠️ BOSS FLOOR ${nextRound} — take command!`, "system");
+      playSfx("boss_enter");
+      addLogEntry(t("battle.bossFloorLog", { floor: nextRound }), "system");
     }
-    addLogEntry(`━ FLOOR ${nextRound} ━ ${nextEnemy.name} appears!`, "system");
+    addLogEntry(t("battle.floorAppear", { floor: nextRound, name: nextEnemy.name }), "system");
+    if (shouldShowFloor10Tease(nextRound) && getAccessMode() === "demo") {
+      addLogEntry(t("battle.demoTease"), "system");
+    }
+    if (shouldShowDemoHudBanner(nextRound, getAccessMode())) {
+      addLogEntry(
+        t("battle.demoFloorsLeft", { floors: demoFloorsRemaining(nextRound) }),
+        "system"
+      );
+    }
 
     if (nextEnemy.hp <= 0) {
       addLogEntry(t("battle.afterburnKill", { name: nextEnemy.name }), "victory");
@@ -1687,6 +1940,7 @@ function useGameEngine() {
 
   function toggleAuto() {
     if (autoEnabledRef.current || autoPausedRef.current) {
+      playSfx("auto_off");
       setAutoEnabled(false);
       setAutoPaused(false);
       autoEnabledRef.current = false;
@@ -1694,6 +1948,7 @@ function useGameEngine() {
       clearAllTimers();
       return;
     }
+    playSfx("auto_on");
     setAutoEnabled(true);
     setAutoPaused(false);
     autoEnabledRef.current = true;
@@ -1729,6 +1984,7 @@ function useGameEngine() {
     addWallet(earned);
     setKills((prev) => prev + 1);
     spawnFloat(`+${earned}💰`, "enemy", "#FFD700");
+    playSfx("coin_pickup");
 
     const nextRound = roundRef.current + 1;
     const pKey = playerRef.current?.classKey;
@@ -1821,6 +2077,13 @@ function useGameEngine() {
     setEnemy((prev) => {
       if (!prev) return prev;
       const newHp = Math.max(0, prev.hp - damage);
+      debugLog("pre-fix", "H3", "BossRush.jsx:2091", "resolve-enemy-damage", {
+        prevHp: prev.hp,
+        damage,
+        newHp,
+        actionToEnemyTurn: GAME_CONFIG.actionToEnemyTurn,
+        enemyTurnDelay: GAME_CONFIG.enemyTurnDelay,
+      });
       if (newHp <= 0) {
         if (onAfterDamage) onAfterDamage(damage);
         clearAllTimers();
@@ -1829,8 +2092,7 @@ function useGameEngine() {
       } else {
         schedule(GAME_CONFIG.actionToEnemyTurn, () => {
           if (onAfterDamage) onAfterDamage(damage);
-          setTurn("enemy");
-          processEnemyTurn();
+          beginEnemyTurn();
         });
       }
       return { ...prev, hp: newHp };
@@ -1841,23 +2103,38 @@ function useGameEngine() {
    * Deal damage to the enemy and handle kill/transition.
    * This is the shared path for basic attacks and damage skills.
    */
-  function dealDamageToEnemy(damage, isCrit, logMessage, onAfterDamage) {
-    addLogEntry(logMessage, "good");
+  function enemyHitFeedback(damage, isCrit, impactSfx) {
+    const sfx = impactSfx ?? (isCrit ? "fight_hit_crit" : "fight_hit");
+    playCombatImpact(sfx);
     spawnFloat(
       `${isCrit ? "⚡" : ""}−${damage}`,
       "enemy",
       isCrit ? "#ff8c00" : "#FFD700"
     );
     triggerShake("enemy");
+  }
+
+  function dealDamageToEnemy(damage, isCrit, logMessage, onAfterDamage, impactSfx) {
+    addLogEntry(logMessage, "good");
+    enemyHitFeedback(damage, isCrit, impactSfx);
     resolveEnemyDamage(damage, onAfterDamage);
+  }
+
+  function beginEnemyTurn() {
+    debugLog("pre-fix", "H3", "BossRush.jsx:2133", "begin-enemy-turn", {
+      enemyHp: enemyRef.current?.hp,
+      playerHp: playerRef.current?.hp,
+      autoEnabled: autoEnabledRef.current,
+      autoPaused: autoPausedRef.current,
+    });
+    setTurn("enemy");
+    playSfx("enemy_attack");
+    processEnemyTurn();
   }
 
   function scheduleAfterPlayerAction() {
     setTurn("animating");
-    schedule(GAME_CONFIG.actionToEnemyTurn, () => {
-      setTurn("enemy");
-      processEnemyTurn();
-    });
+    schedule(GAME_CONFIG.actionToEnemyTurn, () => beginEnemyTurn());
   }
 
   // ── Turn processing ──
@@ -1900,6 +2177,7 @@ function useGameEngine() {
       t("battle.freezeTick", { name: foe.name, turns: turnsLeft }),
       "system"
     );
+    playSfx("freeze_tick");
     commitPlayer((pl) =>
       pl
         ? {
@@ -1966,6 +2244,7 @@ function useGameEngine() {
         const hp = Math.max(0, foe.hp - tick);
         const poisonTurnsLeft = Math.max(0, poisonTurns - 1);
         addLogEntry(t("battle.poisonTick", { damage: tick, name: foe.name }), "good");
+        playSfx("poison_tick");
         spawnFloat(`☠️−${tick}`, "enemy", "#aa44ff");
         foe = {
           ...foe,
@@ -1983,7 +2262,8 @@ function useGameEngine() {
       }
 
       if (p.hasDodgeBuff) {
-        addLogEntry(`💨 ${foe.name} attacks — you DODGE! MISS!`, "good");
+        playSfx("dodge");
+        addLogEntry(t("battle.dodge", { name: foe.name }), "good");
         spawnFloat("MISS!", "player", "#aaaaff");
         commitPlayer({
           ...p,
@@ -2027,6 +2307,7 @@ function useGameEngine() {
           t("battle.aegisReflect", { reflect: reflectDmg, heal: healAmt, name: foe.name }),
           "good"
         );
+        playSfx("reflect");
         spawnFloat(`+${healAmt} HP`, "player", "#00ff99");
         spawnFloat(`↩−${reflectDmg}`, "enemy", "#88ccff");
         const healedHp = Math.min(live.maxHp, (live.hp ?? p.hp) + healAmt);
@@ -2065,6 +2346,7 @@ function useGameEngine() {
       }
 
       addLogEntry(formatPlayerDamageLog(foe, dmgResult, specialName), "bad");
+      if (damage > 0) playCombatImpact("enemy_hit");
       spawnFloat(`−${damage} HP`, "player", "#ff4444");
       triggerShake("player");
       triggerFlash("red");
@@ -2120,6 +2402,12 @@ function useGameEngine() {
     }
 
     const nextRound = currentRound + 1;
+    if (nextRound > DEMO_MAX_FLOOR && getAccessMode() === "demo") {
+      updateRecordsFromRun(currentRound, classKey);
+      trackEvent(ANALYTICS.DEMO_FLOOR_100, { floor: currentRound });
+      setScene("paywall");
+      return;
+    }
     if (
       classKey &&
       nextRound === BATTLE_SCALING.megaBossRound &&
@@ -2139,14 +2427,23 @@ function useGameEngine() {
     addWallet(earned);
     setKills((prev) => prev + 1);
 
+    const bossKill =
+      isBossRound(currentRound) || foe.isBoss || foe.tier === "capstone";
+    playSfx(bossKill ? "boss_victory" : "victory");
+    playSfx("coin_pickup");
+    if (newStreak >= 3) playSfx("streak");
+
     spawnFloat(`+${earned}💰`, "enemy", "#FFD700");
     triggerFlash("gold");
     triggerStreakPop();
 
-    const bonusText = multiplier > 1 ? ` (×${multiplier} STREAK!)` : "";
-    addLogEntry(`☠️ ${foe.name} slain! +${earned} coins${bonusText}`, "victory");
+    const bonusText = multiplier > 1 ? ` (x${multiplier} STREAK!)` : "";
+    addLogEntry(
+      t("battle.enemySlain", { name: foe.name, coins: earned, bonus: bonusText }),
+      "victory"
+    );
     if (newStreak >= 3) {
-      addLogEntry(`🔥 STREAK ${newStreak}! The coins flow!`, "streak");
+      addLogEntry(t("battle.streakFlow", { streak: newStreak }), "streak");
     }
 
     schedule(GAME_CONFIG.victoryDelay, () => {
@@ -2166,12 +2463,13 @@ function useGameEngine() {
   }
 
   function processDeath() {
+    playSfx("death");
     afterburnRef.current = null;
     setBattleTurn(0);
     battleTurnRef.current = 0;
     setAutoEnabled(false);
     setAutoPaused(false);
-    addLogEntry("💀 You have fallen. The gauntlet ends.", "bad");
+    addLogEntry(t("battle.playerFallen"), "bad");
     commitSave({ ...saveRef.current, wallet: walletRef.current });
     updateRecordsFromRun();
     schedule(GAME_CONFIG.deathDelay, () => setScene("gameover"));
@@ -2180,11 +2478,18 @@ function useGameEngine() {
   // ── Camp / shop ──
 
   function selectClass(classKey) {
-    if (!isComboClassKey(classKey) && !isBaseClassUnlocked(saveRef.current, classKey)) {
+    if (
+      !isComboClassKey(classKey) &&
+      !isBaseClassUnlocked(saveRef.current, classKey, getAccessMode())
+    ) {
+      playSfx("ui_error");
       return;
     }
     if (isComboClassKey(classKey)) {
-      if (!isComboUnlockedBySave(saveRef.current, classKey)) return;
+      if (!isComboUnlockedBySave(saveRef.current, classKey)) {
+        playSfx("ui_error");
+        return;
+      }
       const next = { ...saveRef.current };
       ensureComboMeta(next, classKey);
       commitSave(next);
@@ -2194,6 +2499,7 @@ function useGameEngine() {
       if (next !== saveRef.current) commitSave(next);
     }
     setSelectedClassKey(classKey);
+    playSfx("ui_confirm");
     setScene("shop");
   }
 
@@ -2217,7 +2523,11 @@ function useGameEngine() {
     const maxHp = getShopMaxBoost(key);
     if (meta.hpBoost >= maxHp) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.hpPrice, meta.hpBoost);
-    if (!spendWallet(price)) return;
+    if (!spendWallet(price)) {
+      playSfx("ui_error");
+      return;
+    }
+    playSfx("camp_buy");
     patchClassMeta(key, { hpBoost: meta.hpBoost + 1 });
   }
 
@@ -2228,7 +2538,11 @@ function useGameEngine() {
     const maxAtk = getShopMaxBoost(key);
     if (meta.atkBoost >= maxAtk) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.atkPrice, meta.atkBoost);
-    if (!spendWallet(price)) return;
+    if (!spendWallet(price)) {
+      playSfx("ui_error");
+      return;
+    }
+    playSfx("camp_buy");
     patchClassMeta(key, { atkBoost: meta.atkBoost + 1 });
   }
 
@@ -2239,7 +2553,11 @@ function useGameEngine() {
     const maxDef = getShopMaxBoost(key);
     if (meta.defBoost >= maxDef) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.defPrice, meta.defBoost);
-    if (!spendWallet(price)) return;
+    if (!spendWallet(price)) {
+      playSfx("ui_error");
+      return;
+    }
+    playSfx("camp_buy");
     patchClassMeta(key, { defBoost: meta.defBoost + 1 });
   }
 
@@ -2251,11 +2569,16 @@ function useGameEngine() {
     const meta = getClassMetaFromSave(saveRef.current, key);
 
     if (meta.ownedWeaponIds.includes(weaponId)) {
+      playSfx("ui_click");
       patchClassMeta(key, { equippedWeaponId: weaponId });
       return;
     }
 
-    if (!spendWallet(weapon.price)) return;
+    if (!spendWallet(weapon.price)) {
+      playSfx("ui_error");
+      return;
+    }
+    playSfx("camp_buy");
     patchClassMeta(key, {
       ownedWeaponIds: [...meta.ownedWeaponIds, weaponId],
       equippedWeaponId: weaponId,
@@ -2270,7 +2593,11 @@ function useGameEngine() {
     const maxLv = getShopMaxSkillLevel(key);
     if (level >= maxLv) return;
     const price = shopPriceForClass(key, SHOP_CONFIG.skillPrice, level);
-    if (!spendWallet(price)) return;
+    if (!spendWallet(price)) {
+      playSfx("ui_error");
+      return;
+    }
+    playSfx("camp_buy");
     patchClassMeta(key, {
       skillLevels: { ...meta.skillLevels, [skillId]: level + 1 },
     });
@@ -2306,7 +2633,7 @@ function useGameEngine() {
     battleTurnRef.current = 0;
     setTurn("player");
     setLog([
-      { message: "⚔️ The boss rush begins. No mercy.", type: "system", id: 1 },
+      { message: t("battle.rushBegin"), type: "system", id: 1 },
       {
         message: `👁️ "${buildEnemy(1).lore}"`,
         type: "lore",
@@ -2314,8 +2641,13 @@ function useGameEngine() {
       },
     ]);
     setScene("battle");
-    unlockAudio();
-    playThemeForRound(1);
+    unlockGameAudio();
+  }
+
+  function continueFromPaywall() {
+    const nextRound = roundRef.current + 1;
+    setScene("battle");
+    transitionToNextFloor(nextRound);
   }
 
   function scaleFightDamageForClass(damage, p, foe) {
@@ -2353,21 +2685,28 @@ function useGameEngine() {
       );
       const dmg2 = scaleFightDamageForClass(hit2Raw, p, foe);
       addLogEntry(
-        `⚔️ FIGHT! ${p.weapon} strikes ${foe.name} for ${dmg1}, then ${dmg2}!`,
+        t("battle.fightTwin", {
+          weapon: p.weapon,
+          name: foe.name,
+          dmg1,
+          dmg2,
+        }),
         "good"
       );
-      spawnFloat(`−${dmg1}`, "enemy", hit1.isCrit ? "#ff8c00" : "#FFD700");
-      triggerShake("enemy");
+      enemyHitFeedback(
+        dmg1,
+        hit1.isCrit,
+        hit1.isCrit ? "fight_hit_crit" : "fight_hit"
+      );
       resolveEnemyDamage(dmg1, () => {
         const current = enemyRef.current;
         if (!current || current.hp <= 0) return;
-        spawnFloat(`−${dmg2}`, "enemy", "#FFD700");
-        triggerShake("enemy");
         dealDamageToEnemy(
           dmg2,
           false,
-          `⚔️ Second strike — ${dmg2} damage!`,
-          null
+          t("battle.secondStrike", { damage: dmg2 }),
+          null,
+          "fight_hit"
         );
       });
       return;
@@ -2380,15 +2719,27 @@ function useGameEngine() {
       GAME_CONFIG.critMultiplier
     );
     const damage = scaleFightDamageForClass(raw, p, foe);
-    const buffNote = warCry ? " 📯 War Cry!" : "";
+    const buffNote = warCry ? t("battle.warCryNote") : "";
     dealDamageToEnemy(
       damage,
       crit,
-      `⚔️ FIGHT! ${p.weapon} strikes ${foe.name} for ${damage}!${buffNote}`
+      t("battle.fightHit", {
+        weapon: p.weapon,
+        name: foe.name,
+        damage,
+        note: buffNote,
+      }),
+      null,
+      crit ? "fight_hit_crit" : "fight_hit"
     );
   }
 
   function actionFight() {
+    debugLog("pre-fix", "H4", "BossRush.jsx:2742", "action-fight-input", {
+      turn,
+      enemyHp: enemyRef.current?.hp,
+      playerHp: playerRef.current?.hp,
+    });
     if (turn !== "player") return;
     submitCommand(performFight);
   }
@@ -2399,6 +2750,7 @@ function useGameEngine() {
     submitCommand(() => {
       const p = playerRef.current;
       if (!p) return;
+      playSfx("defend");
       addLogEntry(t("battle.defendLog"), "good");
       spawnFloat("🛡️", "player", "#6699cc");
       commitPlayer({
@@ -2415,17 +2767,19 @@ function useGameEngine() {
     setIsSkillsMenuOpen(false);
 
     if (isBossRound(roundRef.current)) {
-      addLogEntry("☠️ Cannot RUN from a boss fight!", "bad");
+      playSfx("ui_error");
+      addLogEntry(t("battle.cannotRunBoss"), "bad");
       return;
     }
 
     const lost = runCoinsEarnedRef.current;
     const msg =
       lost > 0
-        ? `Retreat to camp? You will lose ${lost.toLocaleString()} coins earned this run.`
-        : "Retreat to camp? Your streak will end.";
+        ? t("battle.retreatConfirm", { lost: lost.toLocaleString() })
+        : t("battle.retreatNoCoins");
     if (!window.confirm(msg)) return;
 
+    playSfx("run_retreat");
     clearAllTimers();
     enemyTurnInFlightRef.current = false;
     clearEnemyFreeze();
@@ -2456,6 +2810,12 @@ function useGameEngine() {
   }
 
   function actionMagic(skillIndex) {
+    debugLog("pre-fix", "H4", "BossRush.jsx:2814", "action-skill-input", {
+      turn,
+      skillIndex,
+      enemyHp: enemyRef.current?.hp,
+      playerHp: playerRef.current?.hp,
+    });
     if (turn !== "player") return;
     const p = playerRef.current;
     if (!p) return;
@@ -2495,6 +2855,8 @@ function useGameEngine() {
         ? calcComboSkillDamage(sk, effectiveAtk, upgradeLevel, classKey)
         : calcSkillDamage(sk, effectiveAtk, upgradeLevel);
 
+    playSfx("skill_cast");
+
     switch (skill.type) {
       case "damage":
       case "damage_afterburn": {
@@ -2519,7 +2881,15 @@ function useGameEngine() {
         dealDamageToEnemy(
           damage,
           skill.isCrit || false,
-          `${skill.icon} ${skill.name}! ${damage} damage to ${foe?.name ?? "the enemy"}!${meltNote}${afterburnNote}`
+          t("battle.skillDamageMelt", {
+            icon: skill.icon,
+            name: skill.name,
+            damage,
+            target: foe?.name ?? "the enemy",
+            note: `${meltNote}${afterburnNote}`,
+          }),
+          null,
+          sfxForSkill(skill)
         );
         break;
       }
@@ -2547,6 +2917,7 @@ function useGameEngine() {
           }),
           "good"
         );
+        playCombatImpact("skill_ice");
         spawnFloat(`❄️−${damage}`, "enemy", "#00cfff");
         triggerShake("enemy");
         resolveEnemyDamage(damage);
@@ -2556,10 +2927,20 @@ function useGameEngine() {
       case "damage_steal": {
         const damage = skillDamage(skill);
         const stolen = randInt(...skill.stealRange);
-        addLogEntry(`${skill.icon} ${skill.name}! ${damage} damage + stole ${stolen} coins!`, "good");
+        addLogEntry(
+          t("battle.skillSteal", {
+            icon: skill.icon,
+            name: skill.name,
+            damage,
+            stolen,
+          }),
+          "good"
+        );
+        playCombatImpact("fight_hit");
         spawnFloat(`−${damage}`, "enemy", "#FFD700");
         spawnFloat(`+${stolen}💰`, "player", "#FFD700");
         triggerShake("enemy");
+        playSfx("coin_pickup");
         addWallet(stolen);
         resolveEnemyDamage(damage);
         break;
@@ -2567,20 +2948,25 @@ function useGameEngine() {
 
       case "heal": {
         const heal = skill.healAmount;
-        addLogEntry(`${skill.icon} ${skill.name}! Restored ${heal} HP!`, "good");
+        playCombatImpact(sfxForSkill(skill));
+        addLogEntry(
+          t("battle.skillHeal", { icon: skill.icon, name: skill.name, heal }),
+          "good"
+        );
         spawnFloat(`+${heal} HP`, "player", "#00ff99");
         commitPlayer((p) => ({ ...p, hp: Math.min(p.maxHp, p.hp + heal) }));
         setTurn("animating");
-        schedule(GAME_CONFIG.actionToEnemyTurn, () => {
-          setTurn("enemy");
-          processEnemyTurn();
-        });
+        schedule(GAME_CONFIG.actionToEnemyTurn, () => beginEnemyTurn());
         break;
       }
 
       case "heal_block": {
         const heal = skill.healAmount;
-        addLogEntry(`${skill.icon} ${skill.name}! Bracing & restoring ${heal} HP!`, "good");
+        playCombatImpact(sfxForSkill(skill));
+        addLogEntry(
+          t("battle.skillHealBlock", { icon: skill.icon, name: skill.name, heal }),
+          "good"
+        );
         spawnFloat(`+${heal} HP`, "player", "#00ff99");
         commitPlayer((p) => ({
           ...p,
@@ -2589,16 +2975,14 @@ function useGameEngine() {
           blockReductionNext: skill.blockReduction ?? GAME_CONFIG.blockReduction,
         }));
         setTurn("animating");
-        schedule(GAME_CONFIG.actionToEnemyTurn, () => {
-          setTurn("enemy");
-          processEnemyTurn();
-        });
+        schedule(GAME_CONFIG.actionToEnemyTurn, () => beginEnemyTurn());
         break;
       }
 
       case "buff_war_cry": {
         const turns = GAME_CONFIG.warCryBuffTurns;
         const mult = GAME_CONFIG.warCryStatMult;
+        playCombatImpact(sfxForSkill(skill));
         addLogEntry(
           t("battle.warCry", {
             icon: skill.icon,
@@ -2614,16 +2998,17 @@ function useGameEngine() {
           warCryBuffExpiresOnTurn: battleTurnRef.current + 1 + turns,
         }));
         setTurn("animating");
-        schedule(GAME_CONFIG.actionToEnemyTurn, () => {
-          setTurn("enemy");
-          processEnemyTurn();
-        });
+        schedule(GAME_CONFIG.actionToEnemyTurn, () => beginEnemyTurn());
         break;
       }
 
       case "buff_dodge": {
-        addLogEntry(`${skill.icon} ${skill.name}! You'll evade the next attack!`, "good");
-        spawnFloat("💨 EVASION", "player", "#aaaaff");
+        playCombatImpact(sfxForSkill(skill));
+        addLogEntry(
+          t("battle.skillDodge", { icon: skill.icon, name: skill.name }),
+          "good"
+        );
+        spawnFloat(t("battle.floatEvasion"), "player", "#aaaaff");
         commitPlayer((p) => ({ ...p, hasDodgeBuff: true }));
         scheduleAfterPlayerAction();
         break;
@@ -2649,10 +3034,16 @@ function useGameEngine() {
           };
         });
         addLogEntry(
-          `${skill.icon} ${skill.name}! ${foe?.name ?? "Enemy"} is poisoned (${poisonTurns} turns).`,
+          t("battle.skillPoison", {
+            icon: skill.icon,
+            name: skill.name,
+            target: foe?.name ?? "Enemy",
+            turns: poisonTurns,
+          }),
           "good"
         );
         if (chip > 0) {
+          playCombatImpact("skill_poison");
           spawnFloat(`☠️−${chip}`, "enemy", "#aa44ff");
           triggerShake("enemy");
         }
@@ -2665,15 +3056,18 @@ function useGameEngine() {
             processVictory();
             return;
           }
-          setTurn("enemy");
-          processEnemyTurn();
+          beginEnemyTurn();
         });
         break;
       }
 
       case "reflect_guard": {
-        addLogEntry(`${skill.icon} ${skill.name}! Mirror ready — next hit reflects!`, "good");
-        spawnFloat("🪞 GUARD", "player", "#88ccff");
+        playCombatImpact(sfxForSkill(skill));
+        addLogEntry(
+          t("battle.skillMirror", { icon: skill.icon, name: skill.name }),
+          "good"
+        );
+        spawnFloat(t("battle.floatGuard"), "player", "#88ccff");
         commitPlayer((pl) => ({ ...pl, hasReflectGuard: true }));
         scheduleAfterPlayerAction();
         break;
@@ -2682,11 +3076,13 @@ function useGameEngine() {
       case "combo_light": {
         const damage = skillDamage(skill);
         commitPlayer((pl) => ({ ...pl, hp: pl.maxHp }));
-        spawnFloat("FULL HP", "player", "#00ff99");
+        spawnFloat(t("battle.floatHealFull"), "player", "#00ff99");
         dealDamageToEnemy(
           damage,
           false,
-          `${skill.icon} ${skill.name}! ${damage} damage — fully healed!`
+          t("battle.skillFullHeal", { icon: skill.icon, name: skill.name, damage }),
+          null,
+          sfxForSkill(skill)
         );
         break;
       }
@@ -2706,9 +3102,15 @@ function useGameEngine() {
           };
         });
         addLogEntry(
-          `${skill.icon} ${skill.name}! ${damage} damage — ${foe?.name ?? "Enemy"} is poisoned.`,
+          t("battle.skillPoisonDamage", {
+            icon: skill.icon,
+            name: skill.name,
+            damage,
+            target: foe?.name ?? "Enemy",
+          }),
           "good"
         );
+        playCombatImpact("skill_poison");
         spawnFloat(`☠️−${damage}`, "enemy", "#aa44ff");
         triggerShake("enemy");
         resolveEnemyDamage(damage);
@@ -2717,7 +3119,11 @@ function useGameEngine() {
 
       case "combo_poison_shield": {
         const heal = skill.healAmount ?? 2;
-        addLogEntry(`${skill.icon} ${skill.name}! Bracing — poison ready on block!`, "good");
+        playCombatImpact(sfxForSkill(skill));
+        addLogEntry(
+          t("battle.skillPoisonBlock", { icon: skill.icon, name: skill.name }),
+          "good"
+        );
         spawnFloat(`+${heal} HP`, "player", "#00ff99");
         commitPlayer((pl) => ({
           ...pl,
@@ -2727,10 +3133,7 @@ function useGameEngine() {
           hasPoisonShield: true,
         }));
         setTurn("animating");
-        schedule(GAME_CONFIG.actionToEnemyTurn, () => {
-          setTurn("enemy");
-          processEnemyTurn();
-        });
+        schedule(GAME_CONFIG.actionToEnemyTurn, () => beginEnemyTurn());
         break;
       }
 
@@ -2741,19 +3144,24 @@ function useGameEngine() {
         dealDamageToEnemy(
           damage,
           false,
-          `${skill.icon} ${skill.name}! ${damage} devastation!`,
+          t("battle.skillNuke", { icon: skill.icon, name: skill.name, damage }),
           () => {
             commitPlayer((pl) =>
               pl ? { ...pl, skills: bumpAllSkillCooldowns(pl.skills, punish) } : pl
             );
-          }
+          },
+          sfxForSkill(skill)
         );
         break;
       }
 
       case "combo_toxic_smoke": {
         const poisonTurns = skill.poisonTurns ?? 3;
-        addLogEntry(`${skill.icon} ${skill.name}! Toxic veil — evade and poison!`, "good");
+        playCombatImpact(sfxForSkill(skill));
+        addLogEntry(
+          t("battle.skillToxicVeil", { icon: skill.icon, name: skill.name }),
+          "good"
+        );
         spawnFloat("💨☠️", "player", "#aa44ff");
         commitPlayer((pl) => ({ ...pl, hasDodgeBuff: true }));
         setEnemy((prev) => {
@@ -2777,7 +3185,12 @@ function useGameEngine() {
         dealDamageToEnemy(
           damage,
           false,
-          `${skill.icon} ${skill.name}! ${damage} damage to ${foe?.name ?? "the enemy"}!`,
+          t("battle.skillDamage", {
+            icon: skill.icon,
+            name: skill.name,
+            damage,
+            target: foe?.name ?? "the enemy",
+          }),
           (dealt) => {
             const heal = Math.floor(dealt * ls);
             if (heal <= 0) return;
@@ -2787,7 +3200,9 @@ function useGameEngine() {
             }));
             spawnFloat(`+${heal} HP`, "player", "#cc2244");
             addLogEntry(t("battle.lifestealHeal", { heal }), "good");
-          }
+            playSfx("lifesteal");
+          },
+          sfxForSkill(skill)
         );
         break;
       }
@@ -2826,6 +3241,12 @@ function useGameEngine() {
     streakPop,
     coinPop,
     battleTurn,
+    accessMode,
+    licenseModalOpen,
+    licenseBusy,
+    licenseError,
+    authBusy,
+    authEmail,
 
     // Derived
     isPlayerTurn: turn === "player",
@@ -2842,8 +3263,16 @@ function useGameEngine() {
     // Actions
     setScene,
     setLocalePreference,
+    setLicenseModalOpen,
+    setLicenseError,
+    submitLicenseKey,
+    authSignIn,
+    authSignUp,
+    authSignOut,
+    buyWithStripe,
     selectClass,
     startGame,
+    continueFromPaywall,
     buyHpBoost,
     buyAtkBoost,
     buyDefBoost,
@@ -3159,7 +3588,9 @@ function CombatantDisplay({
       {!isPlayer && (
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", fontSize: 9, color: nameColor }}>
           <span>{name}</span>
-          <span>{hp}/{maxHp} HP</span>
+          <span>
+            {hp}/{maxHp} {t("stat.hpShort")}
+          </span>
         </div>
       )}
 
@@ -3198,12 +3629,18 @@ function CombatantDisplay({
             {name}
             {(buffs?.warCryTurnsLeft ?? 0) > 0 && (
               <span style={{ color: "#ff8c00", fontSize: 7 }}>
-                📯ATK/DEF×{buffs.warCryTurnsLeft}
+                📯{t("battle.buffWarCry", { turns: buffs.warCryTurnsLeft })}
               </span>
             )}
-            {buffs?.hasDodgeBuff && <span style={{ color: "#aaaaff", fontSize: 7 }}>💨EVADE</span>}
-            {buffs?.hasBlockBuff && <span style={{ color: "#6699cc", fontSize: 7 }}>🛡️GUARD</span>}
-            {buffs?.enemyFrozen && <span style={{ color: "#00cfff", fontSize: 7 }}>❄️FROZEN(foe)</span>}
+            {buffs?.hasDodgeBuff && (
+              <span style={{ color: "#aaaaff", fontSize: 7 }}>💨{t("battle.buffEvade")}</span>
+            )}
+            {buffs?.hasBlockBuff && (
+              <span style={{ color: "#6699cc", fontSize: 7 }}>🛡️{t("battle.buffGuard")}</span>
+            )}
+            {buffs?.enemyFrozen && (
+              <span style={{ color: "#00cfff", fontSize: 7 }}>❄️{t("battle.buffFrozenFoe")}</span>
+            )}
           </span>
           <span>{hp}/{maxHp}</span>
         </div>
@@ -3262,6 +3699,7 @@ function BattleControlBar({
   speedMultiplier,
   musicMuted,
   onToggleMusic,
+  onShowTutorial,
 }) {
   const speedLabel = `${speedMultiplier}×`;
   const autoLabel = autoEnabled && !autoPaused
@@ -3325,6 +3763,26 @@ function BattleControlBar({
       >
         {musicMuted ? "🔇" : "♪"}
       </button>
+      {onShowTutorial && (
+        <button
+          type="button"
+          onClick={onShowTutorial}
+          aria-label={t("title.howToFight")}
+          style={{
+            minWidth: 40,
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 8,
+            padding: "8px 4px",
+            borderRadius: 5,
+            cursor: "pointer",
+            border: "2px solid #3a5080",
+            background: "#10102a",
+            color: COLORS.skill,
+          }}
+        >
+          {t("tutorial.helpBtn")}
+        </button>
+      )}
     </div>
   );
 }
@@ -3341,8 +3799,11 @@ function SkillsMenu({ skills, onSelectSkill, onClose }) {
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        maxHeight: 220,
+        maxHeight: "min(45vh, 320px)",
         overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+        overscrollBehavior: "contain",
+        touchAction: "pan-y",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -3503,10 +3964,10 @@ function BattleHUD({
           animation: streakPop ? "pop 0.5s ease" : "none",
         }}
       >
-        {streak > 0 ? `🔥 ×${streak}` : "— —"}
+        {streak > 0 ? `🔥 ×${streak}` : t("battle.noStreak")}
         {streakMultiplier > 1 && (
           <span style={{ color: "#ff4400", fontSize: 7, marginLeft: 5 }}>
-            ({streakMultiplier}× coins)
+            {t("battle.streakCoins", { mult: streakMultiplier })}
           </span>
         )}
       </div>
@@ -3523,11 +3984,13 @@ function BattleHUD({
         <div>{t("battle.turn", { turn: battleTurn })}</div>
         <div>
           {isFreePlayRound(round)
-            ? `FLOOR ${round} · ${t("theme.freeplay")}`
-            : `FLOOR ${round}/${SHOP_CONFIG.maxFloorLabel}`}
+            ? t("battle.floorFreeplay", { n: round, label: t("theme.freeplay") })
+            : t("battle.floor", { n: round })}
         </div>
         {bestRound > 0 && (
-          <div style={{ color: "#665544", fontSize: 6 }}>BEST {bestRound}</div>
+          <div style={{ color: "#665544", fontSize: 6 }}>
+            {t("battle.bestFloor", { n: bestRound })}
+          </div>
         )}
       </div>
     </div>
@@ -3538,27 +4001,45 @@ function BattleHUD({
 // SCENE COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════
 
-function TitleScreen({ onStart, wallet, allTimeRecords, locale, onLocaleChange }) {
+function TitleScreen({
+  onStart,
+  wallet,
+  allTimeRecords,
+  locale,
+  onLocaleChange,
+  onHowToFight,
+  onEnterLicense,
+  accessMode,
+  authEmail,
+  onAuthSignIn,
+  onAuthSignUp,
+  onAuthSignOut,
+  onBuyStripe,
+  authBusy,
+}) {
+  const [accountOpen, setAccountOpen] = useState(false);
+  const hasAccountPanel = accessMode === "demo" || authEmail || isSupabaseConfigured();
+
   return (
     <div
       style={{
-        ...screenShellFixed,
+        ...screenShellScroll,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
-        gap: 28,
+        justifyContent: "flex-start",
+        gap: 14,
         textAlign: "center",
         animation: "fadeUp 0.4s ease",
       }}
     >
-      <div style={{ fontSize: 58, animation: "goldPulse 2s infinite" }}>⚔️</div>
+      <div style={{ fontSize: 40, animation: "goldPulse 2s infinite" }}>⚔️</div>
 
       <div>
-        <div style={{ fontSize: 19, color: COLORS.gold, textShadow: `0 0 20px ${COLORS.gold}`, marginBottom: 10 }}>
-          BOSS RUSH
+        <div style={{ fontSize: 19, color: COLORS.gold, textShadow: `0 0 20px ${COLORS.gold}`, marginBottom: 8 }}>
+          {t("title.gameName")}
         </div>
-        <div style={{ fontSize: 8, color: COLORS.muted, lineHeight: 2.2 }}>
+        <div style={{ fontSize: 8, color: COLORS.muted, lineHeight: 1.8 }}>
           {t("title.tagline")}
         </div>
       </div>
@@ -3602,28 +4083,22 @@ function TitleScreen({ onStart, wallet, allTimeRecords, locale, onLocaleChange }
           style={{
             fontSize: 7,
             color: "#555",
-            lineHeight: 2.4,
+            lineHeight: 1.8,
             borderTop: "1px solid #1a1a28",
-            paddingTop: 12,
+            paddingTop: 10,
             width: "100%",
             maxWidth: 300,
           }}
         >
-          <div style={{ color: "#666", marginBottom: 6 }}>{t("title.personalBest")}</div>
+          <div style={{ color: "#666", marginBottom: 4 }}>{t("title.personalBest")}</div>
           <div>⚔️ {t("title.round")} {allTimeRecords.rounds}</div>
           <div>💰 {allTimeRecords.coins.toLocaleString()} {t("title.coins")}</div>
           <div>🔥 ×{allTimeRecords.streak} {t("title.streak")}</div>
         </div>
       )}
 
-      <div style={{ fontSize: 8, color: COLORS.gold, marginBottom: 4 }}>
+      <div style={{ fontSize: 8, color: COLORS.gold }}>
         {t("title.campWallet")} 💰 {wallet.toLocaleString()}
-      </div>
-
-      <div style={{ fontSize: 7, color: "#444", lineHeight: 2.8, maxWidth: 300 }}>
-        {t("title.help1")}<br />
-        {t("title.help2")}<br />
-        {t("title.help3")}
       </div>
 
       <button
@@ -3631,7 +4106,7 @@ function TitleScreen({ onStart, wallet, allTimeRecords, locale, onLocaleChange }
         style={{
           fontFamily: "'Press Start 2P', monospace",
           fontSize: 12,
-          padding: "16px 44px",
+          padding: "14px 40px",
           borderRadius: 5,
           cursor: "pointer",
           border: `2px solid ${COLORS.fightBorder}`,
@@ -3643,6 +4118,118 @@ function TitleScreen({ onStart, wallet, allTimeRecords, locale, onLocaleChange }
         {t("title.start")}
       </button>
 
+      {onHowToFight && (
+        <button
+          type="button"
+          onClick={onHowToFight}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 7,
+            padding: "8px 14px",
+            cursor: "pointer",
+            border: "1px solid #3a5080",
+            background: "#10102a",
+            color: COLORS.skill,
+          }}
+        >
+          {t("title.howToFight")}
+        </button>
+      )}
+
+      <div style={{ fontSize: 7, color: "#444", lineHeight: 1.8, maxWidth: 300 }}>
+        {t("title.help1")}<br />
+        {t("title.help2")}<br />
+        {t("title.help3")}
+      </div>
+
+      {hasAccountPanel && (
+        <div style={{ width: "100%", maxWidth: 320 }}>
+          <button
+            type="button"
+            onClick={() => setAccountOpen((v) => !v)}
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 7,
+              padding: "8px 12px",
+              cursor: "pointer",
+              border: "1px solid #2a2a3a",
+              background: "#10102a",
+              color: "#88aaff",
+              width: "100%",
+            }}
+          >
+            {accountOpen ? "▼" : "▶"} {t("title.accountSection") || "Account / Buy"}
+          </button>
+          {accountOpen && (
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              {accessMode === "demo" && (
+                <>
+                  <a
+                    href={LEMON_CHECKOUT_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => trackEvent(ANALYTICS.PURCHASE_CLICK, { source: "title" })}
+                    style={{
+                      fontFamily: "'Press Start 2P', monospace",
+                      fontSize: 8,
+                      padding: "10px 18px",
+                      border: "1px solid #00cc77",
+                      background: "#00ff9922",
+                      color: "#00ff99",
+                      textDecoration: "none",
+                      borderRadius: 4,
+                    }}
+                  >
+                    {t("title.buyFull")}
+                  </a>
+                  <button
+                    type="button"
+                    onClick={onEnterLicense}
+                    style={{
+                      fontFamily: "'Press Start 2P', monospace",
+                      fontSize: 7,
+                      padding: "8px 14px",
+                      cursor: "pointer",
+                      border: "1px solid #2a2a3a",
+                      background: "transparent",
+                      color: "#777",
+                    }}
+                  >
+                    {t("title.haveKey")}
+                  </button>
+                </>
+              )}
+
+              <AuthPanel
+                userEmail={authEmail}
+                onSignIn={onAuthSignIn}
+                onSignUp={onAuthSignUp}
+                onSignOut={onAuthSignOut}
+                onBuyStripe={onBuyStripe}
+                busy={authBusy}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, fontSize: 6 }}>
+        <a href="/terms.html" target="_blank" rel="noreferrer" style={{ color: "#555" }}>
+          {t("title.terms")}
+        </a>
+        <a href="/privacy.html" target="_blank" rel="noreferrer" style={{ color: "#555" }}>
+          {t("title.privacy")}
+        </a>
+      </div>
+
       <div style={{ fontSize: 6, color: "#333", letterSpacing: 0.5 }}>
         v{__APP_VERSION__} · {__BUILD_ID__}
       </div>
@@ -3650,8 +4237,7 @@ function TitleScreen({ onStart, wallet, allTimeRecords, locale, onLocaleChange }
   );
 }
 
-function ShopAccordion({ title, children }) {
-  const [open, setOpen] = useState(false);
+function ShopSection({ title, children }) {
   return (
     <div
       style={{
@@ -3661,26 +4247,29 @@ function ShopAccordion({ title, children }) {
         overflow: "hidden",
       }}
     >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+      <div
         style={{
-          width: "100%",
-          padding: "12px 14px",
+          padding: "8px 12px",
           background: "#10102a",
-          border: "none",
           color: COLORS.fight,
           fontFamily: "'Press Start 2P', monospace",
           fontSize: 8,
           textAlign: "left",
-          cursor: "pointer",
+          borderBottom: "1px solid #2a2a4a",
         }}
       >
-        {open ? "▼" : "▶"} {title}
-      </button>
-      {open && (
-        <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>{children}</div>
-      )}
+        {title}
+      </div>
+      <div
+        style={{
+          padding: 10,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -3713,7 +4302,7 @@ function ShopScreen({
   const btnStyle = (enabled) => ({
     fontFamily: "'Press Start 2P', monospace",
     fontSize: 8,
-    padding: "10px 12px",
+    padding: "8px 10px",
     borderRadius: 5,
     cursor: enabled ? "pointer" : "not-allowed",
     border: `1px solid ${enabled ? COLORS.fightBorder : "#1a1a22"}`,
@@ -3727,6 +4316,7 @@ function ShopScreen({
 
   return (
     <div
+      className="shop-screen-scroll"
       style={{
         ...screenShellScroll,
         maxWidth: 440,
@@ -3734,7 +4324,7 @@ function ShopScreen({
         width: "100%",
         display: "flex",
         flexDirection: "column",
-        gap: 12,
+        gap: 8,
         animation: "fadeUp 0.4s ease",
       }}
     >
@@ -3747,9 +4337,11 @@ function ShopScreen({
             dead={false}
           />
         </div>
-        <div style={{ fontSize: 11, color: COLORS.fight }}>{classDef.name} — {t("shop.camp")}</div>
+        <div style={{ fontSize: 11, color: COLORS.fight }}>
+          {t("shop.classCamp", { name: classDef.name, camp: t("shop.camp") })}
+        </div>
         <div style={{ fontSize: 10, color: COLORS.gold, marginTop: 8 }}>
-          💰 {wallet.toLocaleString()} coins
+          💰 {t("shop.walletCoins", { amount: wallet.toLocaleString() })}
         </div>
       </div>
 
@@ -3768,9 +4360,10 @@ function ShopScreen({
           >
             {t("shop.comboInnate", { parents: comboParentLabel(classKey), mult: innate.weaponMult.toFixed(2) })}
             <br />
-            HP {innate.maxHp} · ATK {innate.attack} · DEF {innate.defense}
+            {t("stat.hp")} {innate.maxHp} · {t("stat.atk")} {innate.attack} · {t("stat.def")}{" "}
+            {innate.defense}
           </div>
-          <ShopAccordion title={t("shop.comboUpgrades")}>
+          <ShopSection title={t("shop.comboUpgrades")}>
             <button
               type="button"
               disabled={
@@ -3783,7 +4376,8 @@ function ShopScreen({
                   wallet >= priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))
               )}
             >
-              ❤️ Max HP +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{shopMaxBoost}) — {priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))}💰
+              ❤️ {t("stat.maxHp")} +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/
+              {shopMaxBoost}) {priceMult(SHOP_CONFIG.hpPrice(classMeta.hpBoost))}💰
             </button>
             <button
               type="button"
@@ -3797,7 +4391,8 @@ function ShopScreen({
                   wallet >= priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))
               )}
             >
-              ⚔️ Attack +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{shopMaxBoost}) — {priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))}💰
+              ⚔️ {t("stat.attack")} +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/
+              {shopMaxBoost}) {priceMult(SHOP_CONFIG.atkPrice(classMeta.atkBoost))}💰
             </button>
             <button
               type="button"
@@ -3811,15 +4406,16 @@ function ShopScreen({
                   wallet >= priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))
               )}
             >
-              🛡️ Defense +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{shopMaxBoost}) — {priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))}💰
+              🛡️ {t("stat.defense")} +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/
+              {shopMaxBoost}) {priceMult(SHOP_CONFIG.defPrice(classMeta.defBoost))}💰
             </button>
-          </ShopAccordion>
+          </ShopSection>
         </>
       )}
 
       {!isCombo && classMeta && (
         <>
-          <ShopAccordion title="Permanent boosts">
+          <ShopSection title={t("shop.permanentBoosts")}>
             <button
               type="button"
               disabled={classMeta.hpBoost >= shopMaxBoost || wallet < SHOP_CONFIG.hpPrice(classMeta.hpBoost)}
@@ -3829,7 +4425,8 @@ function ShopScreen({
                   wallet >= SHOP_CONFIG.hpPrice(classMeta.hpBoost)
               )}
             >
-              ❤️ Max HP +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{shopMaxBoost}) — {SHOP_CONFIG.hpPrice(classMeta.hpBoost)}💰
+              ❤️ {t("stat.maxHp")} +{nextHpDelta(classMeta.hpBoost)} ({classMeta.hpBoost}/{shopMaxBoost}){" "}
+              {SHOP_CONFIG.hpPrice(classMeta.hpBoost)}💰
             </button>
             <button
               type="button"
@@ -3840,7 +4437,8 @@ function ShopScreen({
                   wallet >= SHOP_CONFIG.atkPrice(classMeta.atkBoost)
               )}
             >
-              ⚔️ Attack +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{shopMaxBoost}) — {SHOP_CONFIG.atkPrice(classMeta.atkBoost)}💰
+              ⚔️ {t("stat.attack")} +{nextAtkDelta(classMeta.atkBoost)} ({classMeta.atkBoost}/{shopMaxBoost}){" "}
+              {SHOP_CONFIG.atkPrice(classMeta.atkBoost)}💰
             </button>
             <button
               type="button"
@@ -3851,19 +4449,26 @@ function ShopScreen({
                   wallet >= SHOP_CONFIG.defPrice(classMeta.defBoost)
               )}
             >
-              🛡️ Defense +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{shopMaxBoost}) — {SHOP_CONFIG.defPrice(classMeta.defBoost)}💰
+              🛡️ {t("stat.defense")} +{nextDefDelta(classMeta.defBoost)} ({classMeta.defBoost}/{shopMaxBoost}){" "}
+              {SHOP_CONFIG.defPrice(classMeta.defBoost)}💰
             </button>
-          </ShopAccordion>
+          </ShopSection>
         </>
       )}
 
       {classMeta && weapons.length > 0 && (
-        <ShopAccordion title={t("shop.weapons")}>
+        <ShopSection title={t("shop.weapons")}>
           {weapons.map((w) => {
             const owned = classMeta.ownedWeaponIds.includes(w.id);
             const equipped = w.id === equippedId;
             const canBuy = !owned && wallet >= w.price;
-            const label = equipped ? "EQUIPPED" : owned ? "EQUIP" : w.price === 0 ? "FREE" : `${w.price}💰`;
+            const label = equipped
+              ? t("shop.equipped")
+              : owned
+                ? t("shop.equip")
+                : w.price === 0
+                  ? t("shop.free")
+                  : `${w.price}💰`;
             return (
               <button
                 key={w.id}
@@ -3875,16 +4480,16 @@ function ShopScreen({
                   borderColor: equipped ? COLORS.gold : btnStyle(owned || canBuy).border,
                 }}
               >
-                {w.name} (×{w.attackMult} ATK) — {label}
+                {w.name} (x{w.attackMult} {t("stat.atkShort")}) {label}
                 <div style={{ fontSize: 6, color: "#666", marginTop: 4 }}>{w.description}</div>
               </button>
             );
           })}
-        </ShopAccordion>
+        </ShopSection>
       )}
 
       {classMeta && (
-        <ShopAccordion title={t("shop.skillUpgrades")}>
+        <ShopSection title={t("shop.skillUpgrades")}>
           {skillBases.map((rawBase) => {
             const base = localizeSkillTemplate(rawBase);
             const level = classMeta.skillLevels[rawBase.id] ?? 0;
@@ -3904,13 +4509,13 @@ function ShopScreen({
                 {base.icon} {base.name} Lv.{level}/{shopMaxSkill}
                 {!maxed && (
                   <div style={{ fontSize: 6, color: "#666", marginTop: 4 }}>
-                    Next: {describeSkillUpgrade(rawBase, level + 1, previewAttack, classKey)} — {price}💰
+                    {t("shop.next")} {describeSkillUpgrade(rawBase, level + 1, previewAttack, classKey)} {price}💰
                   </div>
                 )}
               </button>
             );
           })}
-        </ShopAccordion>
+        </ShopSection>
       )}
 
       <button type="button" onClick={onStart} style={{ ...btnStyle(true), textAlign: "center", fontSize: 10 }}>
@@ -3971,7 +4576,8 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
         <div style={{ fontSize: 11, marginBottom: 6 }}>{display.name}</div>
         {!hidden && (
           <div style={{ fontSize: 7, color: COLORS.skill, marginBottom: 5 }}>
-            HP:{display.maxHp} | ATK:{display.attack} | DEF:{display.baseDefense ?? 0} | {display.attackLabel}
+            {t("stat.hp")}:{display.maxHp} | {t("stat.atk")}:{display.attack} | {t("stat.def")}:
+            {display.baseDefense ?? 0} | {display.attackLabel}
           </div>
         )}
         <div style={{ fontSize: 7, color: COLORS.muted, lineHeight: 1.9 }}>
@@ -3982,7 +4588,7 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
   );
 }
 
-function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
+function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords, accessMode }) {
   return (
     <div
       style={{
@@ -4035,7 +4641,7 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
         }}
       >
       {CLASS_KEYS.map((key) => {
-        const unlocked = isBaseClassUnlocked(save, key);
+        const unlocked = isBaseClassUnlocked(save, key, accessMode);
         const best = save?.classes?.[key]?.bestFloorReached ?? 0;
         return (
           <ClassCard
@@ -4046,8 +4652,8 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords }) {
             disabled={!unlocked}
             hint={
               unlocked
-                ? `${t("select.bestFloor")} ${best}/${COMBO_UNLOCK_FLOOR}`
-                : baseClassUnlockHint(key)
+                ? `${t("select.bestFloor")} ${best}`
+                : baseClassUnlockHint(save, key, accessMode)
             }
           />
         );
@@ -4214,6 +4820,13 @@ function GameOverScreen({
 }
 
 function BattleScene({ game, musicMuted, onToggleMusic }) {
+  const [tutorialOpen, setTutorialOpen] = useState(() => !hasSeenBattleTutorial());
+
+  const dismissTutorial = () => {
+    markBattleTutorialSeen();
+    setTutorialOpen(false);
+  };
+
   const {
     player,
     enemy,
@@ -4324,7 +4937,7 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
             fontFamily: "'Press Start 2P', monospace",
           }}
         >
-          — vs —
+          {t("battle.vs")}
         </div>
 
         {/* Player */}
@@ -4368,7 +4981,7 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
             padding: "4px 0",
           }}
         >
-          {t("battle.bossCommand")}
+          {t("battle.bossCommand", { floor: round })}
         </div>
       )}
 
@@ -4380,11 +4993,18 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
         onToggleAuto={toggleAuto}
         musicMuted={musicMuted}
         onToggleMusic={onToggleMusic}
+        onShowTutorial={() => setTutorialOpen(true)}
         onCycleSpeed={() => {
           setBattleSpeedIndex(
             (i) => (i + 1) % GAME_CONFIG.battleSpeedOptions.length
           );
         }}
+      />
+
+      <BattleTutorialOverlay
+        open={tutorialOpen}
+        onDismiss={dismissTutorial}
+        classKey={classKey}
       />
 
       {/* Commands */}
@@ -4401,7 +5021,10 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
         <SkillsMenu
           skills={player?.skills || []}
           onSelectSkill={actionMagic}
-          onClose={() => setIsSkillsMenuOpen(false)}
+          onClose={() => {
+            playSfx("ui_cancel");
+            setIsSkillsMenuOpen(false);
+          }}
         />
       )}
 
@@ -4418,20 +5041,35 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
 export default function BossRush() {
   const game = useGameEngine();
   const [musicMuted, setMusicMutedUi] = useState(() => getMusicMuted());
+  const [titleTutorialOpen, setTitleTutorialOpen] = useState(false);
 
   useEffect(() => {
     if (game.scene === "battle") {
-      playThemeForRound(game.round);
-    } else if (
-      game.scene === "shop" ||
-      game.scene === "select" ||
-      game.scene === "title"
-    ) {
+      playThemeForRound(game.round, { autoEnabled: game.autoEnabled });
+    } else if (game.scene === "title") {
+      playTitleMusic();
+    } else if (game.scene === "shop" || game.scene === "select") {
       playCampMusic();
+    } else if (game.scene === "paywall") {
+      playTitleMusic();
     } else if (game.scene === "gameover") {
       stopAllMusic();
     }
-  }, [game.scene, game.round]);
+  }, [game.scene, game.round, game.autoEnabled]);
+
+  useEffect(() => {
+    const resumeHubMusic = () => {
+      unlockGameAudio();
+      if (game.scene === "title") playTitleMusic();
+      else if (game.scene === "shop" || game.scene === "select") playCampMusic();
+    };
+    window.addEventListener("pointerdown", resumeHubMusic, { once: true });
+    window.addEventListener("keydown", resumeHubMusic, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", resumeHubMusic);
+      window.removeEventListener("keydown", resumeHubMusic);
+    };
+  }, [game.scene]);
 
   const toggleMusic = () => {
     const next = !getMusicMuted();
@@ -4444,16 +5082,36 @@ export default function BossRush() {
       <style>{CSS_KEYFRAMES}</style>
 
       {game.scene === "title" && (
-        <TitleScreen
-          onStart={() => {
-            unlockAudio();
-            game.setScene("select");
-          }}
-          wallet={game.wallet}
-          allTimeRecords={game.allTimeRecords}
-          locale={game.locale}
-          onLocaleChange={game.setLocalePreference}
-        />
+        <>
+          <TitleScreen
+            onStart={() => {
+              unlockGameAudio();
+              playSfx("ui_confirm");
+              game.setScene("select");
+            }}
+            wallet={game.wallet}
+            allTimeRecords={game.allTimeRecords}
+            locale={game.locale}
+            onLocaleChange={game.setLocalePreference}
+            onHowToFight={() => setTitleTutorialOpen(true)}
+            onEnterLicense={() => {
+              game.setLicenseModalOpen(true);
+              game.setLicenseError("");
+            }}
+            accessMode={game.accessMode}
+            authEmail={game.authEmail}
+            onAuthSignIn={game.authSignIn}
+            onAuthSignUp={game.authSignUp}
+            onAuthSignOut={game.authSignOut}
+            onBuyStripe={game.buyWithStripe}
+            authBusy={game.authBusy}
+          />
+          <BattleTutorialOverlay
+            open={titleTutorialOpen}
+            onDismiss={() => setTitleTutorialOpen(false)}
+            classKey="mage"
+          />
+        </>
       )}
 
       {game.scene === "select" && (
@@ -4462,6 +5120,7 @@ export default function BossRush() {
           wallet={game.wallet}
           save={game.save}
           allTimeRecords={game.allTimeRecords}
+          accessMode={game.accessMode}
         />
       )}
 
@@ -4477,7 +5136,10 @@ export default function BossRush() {
           onBuyWeapon={game.buyWeapon}
           onBuySkill={game.buySkillUpgrade}
           onStart={() => game.startGame(game.selectedClassKey)}
-          onBack={() => game.setScene("select")}
+          onBack={() => {
+            playSfx("ui_cancel");
+            game.setScene("select");
+          }}
         />
       )}
 
@@ -4500,6 +5162,33 @@ export default function BossRush() {
           onContinue={() => game.setScene("select")}
         />
       )}
+
+      {game.scene === "paywall" && (
+        <PaywallScreen
+          floorReached={game.round}
+          wallet={game.wallet}
+          accessMode={game.accessMode}
+          onEnterLicense={() => {
+            game.setLicenseModalOpen(true);
+            game.setLicenseError("");
+          }}
+          onReturnCamp={() => game.setScene("select")}
+        />
+      )}
+
+      <LicenseKeyModal
+        open={game.licenseModalOpen}
+        busy={game.licenseBusy}
+        error={game.licenseError}
+        onClose={() => game.setLicenseModalOpen(false)}
+        onSubmit={async (key) => {
+          const ok = await game.submitLicenseKey(key);
+          if (ok && game.scene === "paywall") {
+            game.continueFromPaywall();
+          }
+          return ok;
+        }}
+      />
     </>
   );
 }

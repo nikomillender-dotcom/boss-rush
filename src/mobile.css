@@ -7,7 +7,7 @@ body,
   margin: 0;
   overflow: hidden;
   overscroll-behavior: none;
-  touch-action: manipulation;
+  touch-action: auto;
   -webkit-text-size-adjust: 100%;
   background: #0a0a12;
 }
@@ -25,6 +25,14 @@ button,
 
 .class-select-scroll {
   -webkit-overflow-scrolling: touch;
+}
+
+.shop-screen-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 @media (max-width: 480px) {

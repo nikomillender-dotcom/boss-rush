@@ -1,25 +1,34 @@
 {
   "name": "boss-rush",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:release": "vite build && node tools/obfuscate-build.mjs",
     "preview": "vite preview",
     "sprites": "node tools/export-sprites.mjs",
     "sprites:dogs": "node tools/export-dog-sprites.mjs",
+    "sprites:verify": "node tools/verify-sprite-assets.mjs",
+    "sfx:verify": "node tools/verify-sfx-assets.mjs",
     "music:themes": "node tools/prepare-theme-music.mjs",
     "music:battle": "node tools/prepare-battle-phonk.mjs",
+    "music:doggod": "node tools/convert-doggod.mjs",
     "pwa-icons": "node tools/generate-pwa-icons.mjs"
   },
   "dependencies": {
     "@fontsource/press-start-2p": "^5.2.5",
+    "@supabase/supabase-js": "^2.106.2",
+    "jose": "^6.2.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "stripe": "^22.1.1"
   },
   "devDependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@vitejs/plugin-react": "^4.5.2",
+    "javascript-obfuscator": "^5.4.3",
     "playwright": "^1.52.0",
     "vite": "^6.3.5",
     "vite-plugin-pwa": "^0.21.2"

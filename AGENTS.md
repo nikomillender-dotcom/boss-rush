@@ -39,11 +39,17 @@ Production assets are usually fine:
 
 After deploy with auto-reload SW (`src/main.jsx`), opening the app once online should reload into the new bundle without reinstall.
 
-### Regenerate dog PNGs
+### Custom Claude dog art (production)
+
+- **99** `spriteKey` folders under `public/sprites/dogs/` (297 PNGs). Wired via `ENEMY_SPRITES` + `getEnemyCombatSpriteUrl` in `BossRush.jsx`.
+- URLs include `?v=${__BUILD_ID__}` for cache bust on deploy. Verify: `npm run sprites:verify`.
+- **Do not** run `npm run sprites:dogs` over folders with hand-drawn boss art.
+
+### Regenerate procedural dog PNGs (missing keys only)
 
 ```bash
 npx playwright install chromium   # once
-npm run sprites:dogs            # 297 PNGs → public/sprites/dogs/
+npm run sprites:dogs            # fills gaps — overwrites existing folders
 npm run build
 ```
 
@@ -58,6 +64,14 @@ npm run build
 | PWA | `src/main.jsx`, `vite.config.js` |
 | Marketing / pitch | `docs/marketing-handoff.md`, `docs/marketing/` |
 
+## Monetization env vars (Vercel / .env.local)
+
+- Lemon: `LEMON_SQUEEZY_API_KEY`, `LEMON_STORE_ID`, `JWT_SECRET`, `VITE_LEMON_CHECKOUT_URL`
+- Supabase: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+- Stripe: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`, `PUBLIC_SITE_URL`, `VITE_STRIPE_ENABLED`
+
+Never commit secrets. Keep them in Vercel project env or local `.env.local` only.
+
 ## Tests (combat regressions)
 
 ```bash
@@ -67,11 +81,18 @@ node tools/war-cry-test.mjs
 node tools/save-meta-test.mjs
 ```
 
+## Sound effects
+
+- One-shots: `public/audio/sfx/{id}.ogg` — see [docs/sfx-bible.md](docs/sfx-bible.md) and [docs/claude-sfx-handoff.md](docs/claude-sfx-handoff.md)
+- Code: `src/audio/sfx.js`, triggered from `BossRush.jsx`; same mute flag as BGM
+- Verify: `npm run sfx:verify` (exits 1 until Claude delivers all files)
+
 ## Battle music
 
-- Combat uses `public/audio/battle.ogg` or `battle.mp3` when present (`npm run music:battle`).
-- Per-theme Kenney loops in `public/audio/themes/` are fallback if battle track is missing.
-- Bug fix: `themeIdForRound` must use `resolveTheme()` string id (not `.id` on a string).
+- Layered routing in `src/audio/themeMusic.js`: floor 1000 `doggod.ogg`, boss floors `boss.ogg`, hell theme `themes/hell.ogg`, else `battle.ogg` / `battle.mp3`, else Kenney `themes/*.ogg`.
+- Title: `start.ogg`. Shop/select: `camp.ogg`.
+- `npm run music:doggod` encodes `doggod.wav` → `doggod.ogg` (uses `@ffmpeg-installer/ffmpeg` if ffmpeg is not on PATH).
+- `public/audio/doggod.wav` is gitignored; ship `doggod.ogg` only.
 
 ## Do not
 
