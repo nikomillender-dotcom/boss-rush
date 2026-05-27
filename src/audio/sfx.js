@@ -12,7 +12,7 @@
 import { getMusicMuted } from "./themeMusic.js";
 
 const SFX_BASE = "/audio/sfx/";
-const SFX_VOL = 0.55;
+const SFX_VOL = 0.3;
 const POOL_PER_ID = 3;
 
 /** All expected ids (for verify script and docs). */

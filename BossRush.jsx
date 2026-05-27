@@ -20,7 +20,7 @@
  *   - Add saving: serialize gameState to localStorage on win/round change
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { memo, useState, useEffect, useRef, useCallback } from "react";
 import {
   unlockAudio,
   playCampMusic,
@@ -120,10 +120,6 @@ import {
   getAllEnemySpriteKeys,
   FREE_PLAY_START,
 } from "./src/content/enemyThemes.js";
-
-function debugLog() {
-  // intentionally empty: leftover agent telemetry sink
-}
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURATION — tweak these to balance the game
@@ -1603,19 +1599,8 @@ function useGameEngine() {
   /** Schedule a delayed action (automatically cleaned up) */
   const schedule = useCallback(
     (ms, fn) => {
-      const scheduledAt = Date.now();
       const adjustedMs = scheduleMs(ms);
       const id = setTimeout(() => {
-        const drift = Date.now() - scheduledAt - adjustedMs;
-        if (drift > 120) {
-          debugLog("pre-fix", "H4", "BossRush.jsx:1623", "schedule-drift", {
-            ms,
-            adjustedMs,
-            drift,
-            scene: sceneRef.current,
-            turn: turnRef.current,
-          });
-        }
         fn();
       }, adjustedMs);
       timersRef.current.push(id);
@@ -1631,6 +1616,18 @@ function useGameEngine() {
   }, []);
 
   useEffect(() => () => clearAllTimers(), [clearAllTimers]);
+
+  /** Resume AUTO after tab wake / timer loss (mobile browsers throttle background tabs). */
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      if (sceneRef.current !== "battle" || turnRef.current !== "player") return;
+      if (!autoEnabledRef.current || autoPausedRef.current) return;
+      schedule(GAME_CONFIG.autoCommandDelay, runAutoCommand);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [schedule]);
 
   function commitSave(nextSave) {
     const persisted = persistSave(nextSave);
@@ -1752,30 +1749,25 @@ function useGameEngine() {
     return true;
   }
 
-  function checkAutoInterrupt() {
+  function shouldAutoPause() {
     const p = playerRef.current;
     const foe = enemyRef.current;
-    if (!p || !foe || !autoEnabled) return false;
+    if (!p || !foe || !autoEnabledRef.current) return false;
     const template = getEnemyTemplateForFoe(foe);
-    if (wouldAutoLose(p, foe, template, GAME_CONFIG.blockReduction)) {
-      setAutoPaused(true);
-      addLogEntry(t("battle.autoSlowing"), "system");
-      return true;
-    }
-    return false;
+    return wouldAutoLose(p, foe, template, GAME_CONFIG.blockReduction);
+  }
+
+  function checkAutoInterrupt() {
+    if (!shouldAutoPause()) return false;
+    setAutoPaused(true);
+    autoPausedRef.current = true;
+    addLogEntry(t("battle.autoSlowing"), "system");
+    return true;
   }
 
   function runAutoCommand() {
-    debugLog("pre-fix", "H2", "BossRush.jsx:1781", "auto-command-entry", {
-      turn: turnRef.current,
-      autoEnabled: autoEnabledRef.current,
-      autoPaused: autoPausedRef.current,
-      round: roundRef.current,
-      playerHp: playerRef.current?.hp,
-      enemyHp: enemyRef.current?.hp,
-    });
     if (turnRef.current !== "player") return;
-    if (!autoEnabled || autoPaused) return;
+    if (!autoEnabledRef.current || autoPausedRef.current) return;
 
     const classKey = playerRef.current?.classKey;
     const roundNum = roundRef.current;
@@ -1924,16 +1916,25 @@ function useGameEngine() {
     const skipBoss =
       classKey && canAutoSkipBoss(saveRef.current, classKey, roundNum);
 
-    if (skipBoss && autoEnabled && !autoPaused) {
-      schedule(GAME_CONFIG.autoCommandDelay, processAutoBossSkip);
-      return;
-    }
-
     const manualBossBlock =
       isBossRound(roundNum) &&
       !(classKey && canAutoSkipBoss(saveRef.current, classKey, roundNum));
 
-    if (autoEnabled && !autoPaused && !manualBossBlock) {
+    // Resume after low-HP pause once the fight is safe again (refs avoid stale closure).
+    if (autoEnabledRef.current && autoPausedRef.current && !shouldAutoPause()) {
+      setAutoPaused(false);
+      autoPausedRef.current = false;
+    }
+
+    const willScheduleAuto =
+      autoEnabledRef.current && !autoPausedRef.current && !manualBossBlock;
+
+    if (skipBoss && autoEnabledRef.current && !autoPausedRef.current) {
+      schedule(GAME_CONFIG.autoCommandDelay, processAutoBossSkip);
+      return;
+    }
+
+    if (willScheduleAuto) {
       schedule(GAME_CONFIG.autoCommandDelay, runAutoCommand);
     }
   }
@@ -2077,15 +2078,9 @@ function useGameEngine() {
     setEnemy((prev) => {
       if (!prev) return prev;
       const newHp = Math.max(0, prev.hp - damage);
-      debugLog("pre-fix", "H3", "BossRush.jsx:2091", "resolve-enemy-damage", {
-        prevHp: prev.hp,
-        damage,
-        newHp,
-        actionToEnemyTurn: GAME_CONFIG.actionToEnemyTurn,
-        enemyTurnDelay: GAME_CONFIG.enemyTurnDelay,
-      });
       if (newHp <= 0) {
         if (onAfterDamage) onAfterDamage(damage);
+        tickPlayerSkillCooldowns();
         clearAllTimers();
         enemyTurnInFlightRef.current = false;
         schedule(GAME_CONFIG.winToEnemyTurn, () => processVictory());
@@ -2121,12 +2116,6 @@ function useGameEngine() {
   }
 
   function beginEnemyTurn() {
-    debugLog("pre-fix", "H3", "BossRush.jsx:2133", "begin-enemy-turn", {
-      enemyHp: enemyRef.current?.hp,
-      playerHp: playerRef.current?.hp,
-      autoEnabled: autoEnabledRef.current,
-      autoPaused: autoPausedRef.current,
-    });
     setTurn("enemy");
     playSfx("enemy_attack");
     processEnemyTurn();
@@ -2165,6 +2154,13 @@ function useGameEngine() {
     playerRef.current = next;
     setPlayer(next);
     return next;
+  }
+
+  /** End-of-round CD tick when enemy turn is skipped (e.g. one-shot kill). */
+  function tickPlayerSkillCooldowns() {
+    commitPlayer((pl) =>
+      pl ? { ...pl, skills: tickCooldowns(pl.skills) } : pl
+    );
   }
 
   function finishFrozenEnemyTurn(foe, afterEnemyTurn, finishEnemyTurn) {
@@ -2254,6 +2250,7 @@ function useGameEngine() {
         };
         setEnemy(foe);
         if (hp <= 0) {
+          tickPlayerSkillCooldowns();
           clearAllTimers();
           enemyTurnInFlightRef.current = false;
           schedule(GAME_CONFIG.winToEnemyTurn, () => processVictory());
@@ -2735,11 +2732,6 @@ function useGameEngine() {
   }
 
   function actionFight() {
-    debugLog("pre-fix", "H4", "BossRush.jsx:2742", "action-fight-input", {
-      turn,
-      enemyHp: enemyRef.current?.hp,
-      playerHp: playerRef.current?.hp,
-    });
     if (turn !== "player") return;
     submitCommand(performFight);
   }
@@ -2810,12 +2802,6 @@ function useGameEngine() {
   }
 
   function actionMagic(skillIndex) {
-    debugLog("pre-fix", "H4", "BossRush.jsx:2814", "action-skill-input", {
-      turn,
-      skillIndex,
-      enemyHp: enemyRef.current?.hp,
-      playerHp: playerRef.current?.hp,
-    });
     if (turn !== "player") return;
     const p = playerRef.current;
     if (!p) return;
@@ -3051,6 +3037,7 @@ function useGameEngine() {
         schedule(GAME_CONFIG.actionToEnemyTurn, () => {
           const current = enemyRef.current;
           if (current && current.hp <= 0) {
+            tickPlayerSkillCooldowns();
             clearAllTimers();
             enemyTurnInFlightRef.current = false;
             processVictory();
@@ -3432,6 +3419,10 @@ const CSS_KEYFRAMES = `
   }
 `;
 
+const LOW_MOTION_MODE =
+  typeof window !== "undefined" &&
+  window.matchMedia("(max-width: 480px), (prefers-reduced-motion: reduce)").matches;
+
 // ═══════════════════════════════════════════════════════════════════════
 // UI COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════
@@ -3449,7 +3440,7 @@ function FloatingNumber({ text, color }) {
         fontSize: "13px",
         whiteSpace: "nowrap",
         textShadow: "1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000",
-        animation: "floatUp 1.4s ease-out forwards",
+        animation: LOW_MOTION_MODE ? "none" : "floatUp 1.4s ease-out forwards",
         zIndex: 99,
         color,
       }}
@@ -3472,10 +3463,10 @@ function HpBar({ current, max, isPlayer }) {
     fillGradient = isLow
       ? "linear-gradient(90deg, #7B4000, #cc8800)"
       : "linear-gradient(90deg, #006600, #00cc44)";
-    glowAnimation = isLow ? "hpWarningGlow 0.8s infinite" : "none";
+    glowAnimation = !LOW_MOTION_MODE && isLow ? "hpWarningGlow 0.8s infinite" : "none";
   } else {
     fillGradient = "linear-gradient(90deg, #7B0000, #dd2222)";
-    glowAnimation = isLow ? "hpCriticalGlow 1s infinite" : "none";
+    glowAnimation = !LOW_MOTION_MODE && isLow ? "hpCriticalGlow 1s infinite" : "none";
   }
 
   return (
@@ -3558,7 +3549,7 @@ function CharacterSprite({ src, fallbackIcon, size, dead, debugLabel }) {
 }
 
 /** Character display (used for both enemy and player) */
-function CombatantDisplay({
+const CombatantDisplay = memo(function CombatantDisplay({
   name,
   hp,
   maxHp,
@@ -3581,7 +3572,7 @@ function CombatantDisplay({
         flexDirection: "column",
         alignItems: "center",
         gap: 6,
-        animation: shaking ? "shake 0.42s ease" : "none",
+        animation: !LOW_MOTION_MODE && shaking ? "shake 0.42s ease" : "none",
       }}
     >
       {/* Name row (enemy: above icon; player: below icon) */}
@@ -3647,7 +3638,7 @@ function CombatantDisplay({
       )}
     </div>
   );
-}
+});
 
 /** FF1-style command grid */
 function ActionButtons({ isPlayerTurn, onFight, onSkills, onDefend, onRun, runDisabled }) {
@@ -3879,7 +3870,7 @@ function SkillsMenu({ skills, onSelectSkill, onClose }) {
 }
 
 /** Scrollable battle log */
-function BattleLog({ entries }) {
+const BattleLog = memo(function BattleLog({ entries }) {
   const logRef = useRef(null);
 
   useEffect(() => {
@@ -3911,7 +3902,7 @@ function BattleLog({ entries }) {
             lineHeight: 1.8,
             fontFamily: "'Press Start 2P', monospace",
             color: LOG_COLORS[entry.type] || LOG_COLORS.info,
-            animation: "logSlideIn 0.3s ease",
+            animation: LOW_MOTION_MODE ? "none" : "logSlideIn 0.3s ease",
           }}
         >
           {entry.message}
@@ -3919,10 +3910,10 @@ function BattleLog({ entries }) {
       ))}
     </div>
   );
-}
+});
 
 /** Top HUD showing wallet, streak, and round */
-function BattleHUD({
+const BattleHUD = memo(function BattleHUD({
   wallet,
   streak,
   streakMultiplier,
@@ -3949,7 +3940,7 @@ function BattleHUD({
           color: COLORS.gold,
           fontSize: 11,
           fontFamily: "'Press Start 2P', monospace",
-          animation: coinPop ? "coinBounce 0.5s ease" : "none",
+          animation: !LOW_MOTION_MODE && coinPop ? "coinBounce 0.5s ease" : "none",
         }}
       >
         💰 {wallet.toLocaleString()}
@@ -3961,7 +3952,7 @@ function BattleHUD({
           fontSize: streak >= 5 ? 12 : 9,
           fontFamily: "'Press Start 2P', monospace",
           transition: "font-size 0.3s",
-          animation: streakPop ? "pop 0.5s ease" : "none",
+          animation: !LOW_MOTION_MODE && streakPop ? "pop 0.5s ease" : "none",
         }}
       >
         {streak > 0 ? `🔥 ×${streak}` : t("battle.noStreak")}
@@ -3995,7 +3986,7 @@ function BattleHUD({
       </div>
     </div>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════════
 // SCENE COMPONENTS
@@ -4987,8 +4978,8 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
   // Determine background flash
   let bgStyle = COLORS.bg;
   let bgAnimation = "none";
-  if (flashType === "gold") bgAnimation = "bgFlashGold 0.35s ease";
-  if (flashType === "red") bgAnimation = "bgFlashRed 0.35s ease";
+  if (!LOW_MOTION_MODE && flashType === "gold") bgAnimation = "bgFlashGold 0.35s ease";
+  if (!LOW_MOTION_MODE && flashType === "red") bgAnimation = "bgFlashRed 0.35s ease";
 
   // Split floating numbers by target
   const enemyFloats = floatingNumbers.filter((f) => f.target === "enemy");
