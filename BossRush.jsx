@@ -120,6 +120,8 @@ import {
   getAllEnemySpriteKeys,
   FREE_PLAY_START,
 } from "./src/content/enemyThemes.js";
+import { PARTY_CLASS_KEYS } from "./src/content/classDefinitions.js";
+import { skillIdsUnlockedByFloor } from "./src/content/skillDefinitions.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURATION — tweak these to balance the game
@@ -928,7 +930,92 @@ function createDefaultSave() {
     classes,
     records: { coins: 0, streak: 0, rounds: 0 },
     unlocks: { ...DEFAULT_UNLOCKS },
+    ...createDefaultPartySave(),
   };
+}
+
+/** Party Mode save block: separate wallet, equipment, permanent skill unlocks, records. */
+function createDefaultPartyEquipment() {
+  const equip = {};
+  for (const key of PARTY_CLASS_KEYS) {
+    equip[key] = { weaponTier: 0, armorTier: 0, skillPotency: {} };
+  }
+  return equip;
+}
+
+function createDefaultPartySave() {
+  const partySkillUnlocks = {};
+  for (const key of PARTY_CLASS_KEYS) {
+    // Floor-1 skills are earned immediately on first party run.
+    partySkillUnlocks[key] = skillIdsUnlockedByFloor(key, 1);
+  }
+  return {
+    partyWallet: 0,
+    partyEquipment: createDefaultPartyEquipment(),
+    partySkillUnlocks,
+    partyRecords: {
+      bestFloor: 0,
+      bestComp: null,
+      totalRuns: 0,
+      highestBossDefeated: null,
+      doggodDefeated: false,
+    },
+    lastPartyComp: ["warrior", "mage", "rogue", "cleric"],
+    partyUnlocks: {},
+  };
+}
+
+/**
+ * Merge persisted party fields from raw save data onto a fresh default block.
+ * Mutates `save` in place. Missing fields fall back to defaults (back-compat for
+ * pre-party saves). Skill unlocks are unioned with floor-1 defaults so the set
+ * only ever grows.
+ */
+function mergePartySaveFields(save, data) {
+  const defaults = createDefaultPartySave();
+  save.partyWallet = Math.max(0, Number(data.partyWallet) || 0);
+
+  save.partyEquipment = createDefaultPartyEquipment();
+  for (const key of PARTY_CLASS_KEYS) {
+    const incoming = data.partyEquipment?.[key];
+    if (!incoming) continue;
+    save.partyEquipment[key] = {
+      weaponTier: Math.max(0, Number(incoming.weaponTier) || 0),
+      armorTier: Math.max(0, Number(incoming.armorTier) || 0),
+      skillPotency:
+        incoming.skillPotency && typeof incoming.skillPotency === "object"
+          ? { ...incoming.skillPotency }
+          : {},
+    };
+  }
+
+  save.partySkillUnlocks = {};
+  for (const key of PARTY_CLASS_KEYS) {
+    const earned = Array.isArray(data.partySkillUnlocks?.[key])
+      ? data.partySkillUnlocks[key]
+      : [];
+    save.partySkillUnlocks[key] = [
+      ...new Set([...skillIdsUnlockedByFloor(key, 1), ...earned]),
+    ];
+  }
+
+  const rec = data.partyRecords ?? {};
+  save.partyRecords = {
+    bestFloor: Math.max(0, Number(rec.bestFloor) || 0),
+    bestComp: Array.isArray(rec.bestComp) ? rec.bestComp : null,
+    totalRuns: Math.max(0, Number(rec.totalRuns) || 0),
+    highestBossDefeated:
+      typeof rec.highestBossDefeated === "string" ? rec.highestBossDefeated : null,
+    doggodDefeated: Boolean(rec.doggodDefeated),
+  };
+
+  save.lastPartyComp = Array.isArray(data.lastPartyComp)
+    ? data.lastPartyComp.slice(0, 4)
+    : defaults.lastPartyComp;
+  save.partyUnlocks =
+    data.partyUnlocks && typeof data.partyUnlocks === "object"
+      ? { ...data.partyUnlocks }
+      : {};
 }
 
 function isComboUnlocked(save, comboKey) {
@@ -1123,6 +1210,7 @@ function loadSave() {
         };
         save.classes[comboKey] = syncBossesDefeatedFromBestFloor(save.classes[comboKey]);
       }
+      mergePartySaveFields(save, data);
       const merged = mergeMissingClassMetas(save);
       const synced = syncAllComboUnlocks(merged);
       const checked = verifySaveIntegrity({
