@@ -57,6 +57,60 @@ export function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Party Mode: compressed 50-floor zones, boss every 5, mini-boss the floor before.
+// Source of truth: docs/party-mode-canonical-handoff.md
+// ───────────────────────────────────────────────────────────────────────────
+
+export const PARTY_MODE_FLOOR_CONFIG = {
+  floorsPerZone: 50,
+  bossEvery: 5,
+  zoneCount: 10,
+  totalFloors: 500,
+  doggodFloor: 500,
+  freeplayTrashEscalationFloor: 2000,
+};
+
+/** Tier multipliers applied to species base stats before floor scaling. */
+export const PARTY_TIER_MULT = {
+  trash: { hp: 4.0, atk: 2.5, reward: 2.0, actionsPerTurn: 1 },
+  miniBoss: { hp: 6.0, atk: 3.0, reward: 3.0, actionsPerTurn: 1 },
+  boss: { hp: 10.0, atk: 3.5, reward: 5.0, actionsPerTurn: 2 },
+  capstone: { hp: 15.0, atk: 4.0, reward: 10.0, actionsPerTurn: 2 },
+};
+
+/** Tier for a party floor: boss on /5, mini-boss the floor before, else trash. */
+export function getEnemyTierForFloor(floor) {
+  const floorInZone = ((floor - 1) % PARTY_MODE_FLOOR_CONFIG.floorsPerZone) + 1;
+  if (floorInZone % PARTY_MODE_FLOOR_CONFIG.bossEvery === 0) return "boss";
+  if (floorInZone % PARTY_MODE_FLOOR_CONFIG.bossEvery === PARTY_MODE_FLOOR_CONFIG.bossEvery - 1) {
+    return "miniBoss";
+  }
+  return "trash";
+}
+
+/** Zone index (0-based) for a party floor, clamped to zone count. */
+export function getZoneIndexForPartyFloor(floor) {
+  const idx = Math.floor((Math.max(1, floor) - 1) / PARTY_MODE_FLOOR_CONFIG.floorsPerZone);
+  return Math.min(idx, PARTY_MODE_FLOOR_CONFIG.zoneCount - 1);
+}
+
+/** Party floors scale enemies at ~2x the solo rate (compressed progression). */
+export function getEnemyRoundScaleParty(round) {
+  return getEnemyRoundScale(Math.max(1, round) * 2);
+}
+
+/** Freeplay escalation: trash gains boss-tier ability access at 2000+. */
+export function getTierForFreeplay(baseTier, floor) {
+  if (
+    floor >= PARTY_MODE_FLOOR_CONFIG.freeplayTrashEscalationFloor &&
+    baseTier === "trash"
+  ) {
+    return "boss";
+  }
+  return baseTier;
+}
+
 export function isBossRound(round) {
   return (
     round > 0 &&
