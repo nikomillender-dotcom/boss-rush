@@ -84,7 +84,7 @@ node tools/save-meta-test.mjs
 ## Sound effects
 
 - One-shots: `public/audio/sfx/{id}.ogg` — see [docs/sfx-bible.md](docs/sfx-bible.md) and [docs/claude-sfx-handoff.md](docs/claude-sfx-handoff.md)
-- Code: `src/audio/sfx.js`, triggered from `BossRush.jsx`; same mute flag as BGM
+- Code: `src/audio/sfx.js`, triggered from `BossRush.jsx`; same mute flag as BGM (legacy); use Settings panel for independent master/music/SFX volume
 - Verify: `npm run sfx:verify` (exits 1 until Claude delivers all files)
 
 ## Battle music

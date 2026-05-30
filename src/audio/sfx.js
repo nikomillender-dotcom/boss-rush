@@ -9,10 +9,14 @@
  * silently rejected (see commit message for full root cause).
  */
 
-import { getMusicMuted } from "./themeMusic.js";
+import {
+  getEffectiveSfxVolume,
+  isVolumeAudible,
+  subscribeAudioSettings,
+} from "./audioSettings.js";
 
 const SFX_BASE = "/audio/sfx/";
-const SFX_VOL = 0.3;
+export const SFX_VOL = 0.3;
 const POOL_PER_ID = 3;
 
 /** All expected ids (for verify script and docs). */
@@ -59,6 +63,18 @@ export const SFX_IDS = [
 let unlocked = false;
 const pool = new Map();
 
+function refreshSfxPoolVolumes() {
+  const vol = getEffectiveSfxVolume(SFX_VOL);
+  for (const list of pool.values()) {
+    for (const a of list) {
+      a.muted = false;
+      a.volume = vol;
+    }
+  }
+}
+
+subscribeAudioSettings(refreshSfxPoolVolumes);
+
 export function unlockSfx() {
   unlocked = true;
 }
@@ -84,7 +100,7 @@ function nextAudio(id) {
   if (list.length < POOL_PER_ID) {
     const a = new Audio(srcFor(id));
     a.preload = "auto";
-    a.volume = SFX_VOL;
+    a.volume = getEffectiveSfxVolume(SFX_VOL);
     list.push(a);
     return a;
   }
@@ -97,11 +113,13 @@ function nextAudio(id) {
  * Play a sound effect by id (filename without extension).
  */
 export function playSfx(id) {
-  if (!unlocked || getMusicMuted() || !id) return;
+  if (!unlocked || !id) return;
+  const vol = getEffectiveSfxVolume(SFX_VOL);
+  if (!isVolumeAudible(vol)) return;
   try {
     const audio = nextAudio(id);
     audio.muted = false;
-    audio.volume = SFX_VOL;
+    audio.volume = vol;
     audio.currentTime = 0;
     const p = audio.play();
     if (p?.catch) p.catch(() => {});
