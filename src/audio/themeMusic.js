@@ -3,7 +3,8 @@
  */
 
 import { resolveTheme } from "../content/enemyThemes.js";
-import { isBossRound } from "../battle/scaling.js";
+import { isBossRound, PARTY_MODE_FLOOR_CONFIG } from "../battle/scaling.js";
+import { themeIdForPartyFloor } from "../party/partyEnemyAI.js";
 
 const THEME_IDS = [
   "human",
@@ -285,6 +286,77 @@ export function themeIdForRound(round) {
   const theme = resolveTheme(round);
   if (typeof theme === "string") return theme;
   return theme?.id ?? THEME_FALLBACK_ID;
+}
+
+async function resolvePartyBattleTrackSrc(floor, { autoEnabled = false } = {}) {
+  if (floor === PARTY_MODE_FLOOR_CONFIG.doggodFloor) {
+    const doggod = await firstExisting(DOGGOD_TRACK_CANDIDATES);
+    if (doggod) return doggod;
+  }
+  if (!autoEnabled && (await fileExists(BOSS_TRACK))) {
+    const tierFloor = ((floor - 1) % 50) + 1;
+    if (tierFloor % 5 === 0) return BOSS_TRACK;
+  }
+  const themeId = themeIdForPartyFloor(floor);
+  if (themeId === "hell" && (await fileExists(HELL_TRACK))) {
+    return HELL_TRACK;
+  }
+  const battle = await firstExisting(BATTLE_TRACK_CANDIDATES);
+  if (battle) return battle;
+
+  let resolved = themeId;
+  if (!THEME_IDS.includes(resolved)) resolved = THEME_FALLBACK_ID;
+  return `/audio/themes/${resolved}.ogg`;
+}
+
+export async function playThemeForPartyFloor(floor, { autoEnabled = false } = {}) {
+  debugLog("pre-fix", "H1", "themeMusic.js:party", "play-party-theme-request", {
+    floor,
+    autoEnabled,
+    unlocked,
+    battleStarting,
+    currentBattleSrc,
+    hasBattleAudio: Boolean(battleAudio),
+    isPlaying: isPlaying(battleAudio),
+  });
+  if (!unlocked || battleStarting) return;
+  const src = await resolvePartyBattleTrackSrc(floor, { autoEnabled });
+
+  if (src === currentBattleSrc && battleAudio && isPlaying(battleAudio)) {
+    return;
+  }
+
+  if (campAudio) {
+    campAudio.pause();
+    campAudio.currentTime = 0;
+    campAudio = null;
+    currentCampSrc = null;
+  }
+  if (titleAudio) {
+    titleAudio.pause();
+    titleAudio.currentTime = 0;
+    titleAudio = null;
+    currentTitleSrc = null;
+  }
+
+  battleStarting = true;
+  try {
+    if (src !== currentBattleSrc || !battleAudio) {
+      await stopBattle();
+      currentBattleSrc = src;
+      battleAudio = makeAudio(src, BATTLE_VOL);
+    }
+    battleAudio.playbackRate = 1;
+    if (!isPlaying(battleAudio)) {
+      try {
+        await battleAudio.play();
+      } catch {
+        /* ignore */
+      }
+    }
+  } finally {
+    battleStarting = false;
+  }
 }
 
 async function resolveBattleTrackSrc(round, { autoEnabled = false } = {}) {

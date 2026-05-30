@@ -26,6 +26,7 @@ import {
   playCampMusic,
   playTitleMusic,
   playThemeForRound,
+  playThemeForPartyFloor,
   stopAllMusic,
   getMusicMuted,
   setMusicMuted,
@@ -126,7 +127,7 @@ import {
   skillIdsUnlockedByFloor,
   getPartySkill,
 } from "./src/content/skillDefinitions.js";
-import { getEnemyTierForFloor } from "./src/battle/scaling.js";
+import { getEnemyTierForFloor, PARTY_MODE_FLOOR_CONFIG } from "./src/battle/scaling.js";
 import { partyActOrderIndices } from "./src/combat/turnSystem.js";
 import {
   applyFloorUnlocks,
@@ -152,6 +153,7 @@ import {
   listReadySkills,
   needsAllyTarget,
   tickEnemyDot,
+  tickDoggodRegen,
   tickPartyBuffs,
   tickPartyCooldowns,
 } from "./src/party/partyCombat.js";
@@ -3470,7 +3472,8 @@ function useGameEngine() {
     appendPartyLog(`Floor ${floor} cleared! +${reward} run coins`);
 
     let members = [...partyMembersRef.current];
-    const bossFloor = getEnemyTierForFloor(floor) === "boss";
+    const tier = getEnemyTierForFloor(floor);
+    const bossFloor = tier === "boss" || tier === "capstone" || foe?.isDoggod;
     if (bossFloor) {
       const staff = partyHasStaffOfLife(saveRef.current.partySkillUnlocks, floor);
       members = applyPostBossHeal(members, { staffOfLife: staff });
@@ -3488,6 +3491,15 @@ function useGameEngine() {
           ...persisted.partyRecords,
           bestFloor: nextFloor,
           bestComp: partyCompRef.current,
+        },
+      });
+    }
+    if (foe?.isDoggod || floor === PARTY_MODE_FLOOR_CONFIG.doggodFloor) {
+      persisted = commitSave({
+        ...persisted,
+        partyRecords: {
+          ...persisted.partyRecords,
+          doggodDefeated: true,
         },
       });
     }
@@ -3550,6 +3562,9 @@ function useGameEngine() {
     const dotResult = tickEnemyDot(foe);
     if (dotResult.log) appendPartyLog(dotResult.log);
     foe = dotResult.enemy;
+    const regenResult = tickDoggodRegen(foe);
+    if (regenResult.log) appendPartyLog(regenResult.log);
+    foe = regenResult.enemy;
     if (foe.hp <= 0) {
       setPartyEnemy(foe);
       schedule(200, handlePartyVictory);
@@ -5805,7 +5820,11 @@ export default function BossRush() {
 
   useEffect(() => {
     if (game.scene === "battle") {
-      playThemeForRound(game.round, { autoEnabled: game.autoEnabled });
+      if (game.gameMode === "party") {
+        playThemeForPartyFloor(game.partyFloor, { autoEnabled: game.autoEnabled });
+      } else {
+        playThemeForRound(game.round, { autoEnabled: game.autoEnabled });
+      }
     } else if (game.scene === "title") {
       playTitleMusic();
     } else if (
@@ -5820,7 +5839,7 @@ export default function BossRush() {
     } else if (game.scene === "gameover") {
       stopAllMusic();
     }
-  }, [game.scene, game.round, game.autoEnabled]);
+  }, [game.scene, game.round, game.partyFloor, game.gameMode, game.autoEnabled]);
 
   useEffect(() => {
     const resumeHubMusic = () => {
