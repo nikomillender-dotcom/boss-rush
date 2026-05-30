@@ -120,11 +120,28 @@ function tryApplyStatus(enemy, spec, tier, rng = Math.random) {
   return { ...spec, landed };
 }
 
-export function listReadySkills(member, equipment) {
+/** All unlocked skills with cooldown state (for party command dock). */
+export function listPartySkills(member) {
   return (member.unlockedSkillIds ?? [])
     .map((id) => getPartySkill(member.classKey, id))
-    .filter((s) => s && isSkillReady(member, s.id))
-    .map((s) => ({ ...s, abbr: skillAbbrev(s.name) }));
+    .filter(Boolean)
+    .map((s) => {
+      const cooldownLeft = member.cooldowns?.[s.id] ?? 0;
+      return {
+        id: s.id,
+        name: s.name,
+        icon: s.icon,
+        cooldown: s.cooldown,
+        cooldownLeft,
+        ready: cooldownLeft <= 0,
+        description: s.description,
+      };
+    });
+}
+
+export function listReadySkills(member, equipment) {
+  void equipment;
+  return listPartySkills(member).filter((s) => s.ready);
 }
 
 export function needsAllyTarget(skill) {

@@ -137,7 +137,7 @@ All cats share party floor as level. Speed never grows.
 - Unlock on **first-ever** reach of floor milestone → append to `partySkillUnlocks[classKey]`
 - Potency purchased in camp (0.4× prices), levels 0–5 (1.0 → 1.75×)
 - `ignoreCooldownReduction`: Shield Party, Forbidden Magic, Fallen Angel; Forbidden immune to Wind
-- Battle UX: 3-letter skill boxes, tap for tooltip, ally picker for single-target heals/buffs
+- Battle UX: active-cat command dock; icon + full skill name; CD visible; ally picker for single-target heals/buffs
 - **Debuff ownership:** Rogue = primary; others = utility only
 
 ---
