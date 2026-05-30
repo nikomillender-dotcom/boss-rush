@@ -298,13 +298,13 @@ tools/
 
 ## Definition of done (Phase 2 slice)
 
-- [ ] Title shows Solo / Party; solo path unchanged
-- [ ] Party select picks 4 base classes; saves `lastPartyComp`
-- [ ] Party run uses `getStatsAtLevel` and `partySkillUnlocks`
-- [ ] Reaching new floor merges skill unlocks into save
-- [ ] Battle loop: speed-ordered cat turns, then enemy; KO skip
-- [ ] `party-skill-balance-test.mjs` still passes; solo tests still pass; `npm run build` passes
+- [x] Title shows Solo / Party; solo path unchanged
+- [x] Party select picks 4 base classes; saves `lastPartyComp`
+- [x] Party run uses `getStatsAtLevel` and `partySkillUnlocks`
+- [x] Reaching new floor merges skill unlocks into save
+- [x] Battle loop: speed-ordered cat turns, then enemy; KO skip
+- [x] `party-skill-balance-test.mjs` still passes; solo tests still pass; `npm run build` passes
 
 ---
 
-*Handoff written after Phase 1 merge on `cursor/party-mode-phase1-32ac`. Update this file when Phase 2 lands.*
+*Phase 2 vertical slice landed on `cursor/party-mode-phase2-engine-0d7a`.*
