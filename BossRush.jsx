@@ -122,6 +122,23 @@ import {
 } from "./src/content/enemyThemes.js";
 import { PARTY_CLASS_KEYS } from "./src/content/classDefinitions.js";
 import { skillIdsUnlockedByFloor } from "./src/content/skillDefinitions.js";
+import { getEnemyTierForFloor } from "./src/battle/scaling.js";
+import { partyActOrderIndices } from "./src/combat/turnSystem.js";
+import {
+  applyFloorUnlocks,
+} from "./src/party/partyLeveling.js";
+import {
+  buildPartyEnemy,
+  createPartyRoster,
+  isValidPartyComp,
+  retreatRunCoinLoss,
+  applyPostBossHeal,
+  refreshPartyForFloor,
+  isPartyWiped,
+  partyHasStaffOfLife,
+} from "./src/party/partyState.js";
+import PartySelectScreen from "./src/party/PartySelectScreen.jsx";
+import PartyBattleScreen from "./src/party/PartyBattleScreen.jsx";
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURATION — tweak these to balance the game
@@ -1579,7 +1596,17 @@ function useGameEngine() {
   });
 
   // ── Core state ──
-  const [scene, setScene] = useState("title"); // title | select | shop | battle | gameover
+  const [scene, setScene] = useState("title"); // title | select | shop | battle | gameover | party-select
+  const [gameMode, setGameMode] = useState(null); // null | solo | party
+  const [partyComp, setPartyComp] = useState(null);
+  const [partyMembers, setPartyMembers] = useState([]);
+  const [partyFloor, setPartyFloor] = useState(1);
+  const [partyRunCoins, setPartyRunCoins] = useState(0);
+  const [partyLog, setPartyLog] = useState([]);
+  const [partyEnemy, setPartyEnemy] = useState(null);
+  const [partyCatQueue, setPartyCatQueue] = useState([]);
+  const [partyActiveCatIndex, setPartyActiveCatIndex] = useState(null);
+  const [partyTurnPhase, setPartyTurnPhase] = useState("cats"); // cats | enemy
   const [selectedClassKey, setSelectedClassKey] = useState(null);
   const selectedClassKeyRef = useRef(null);
   selectedClassKeyRef.current = selectedClassKey;
@@ -1636,6 +1663,13 @@ function useGameEngine() {
   const sceneRef = useRef(scene);
   const autoEnabledRef = useRef(autoEnabled);
   const autoPausedRef = useRef(autoPaused);
+  const partyMembersRef = useRef(partyMembers);
+  const partyEnemyRef = useRef(partyEnemy);
+  const partyFloorRef = useRef(partyFloor);
+  const partyRunCoinsRef = useRef(partyRunCoins);
+  const partyCatQueueRef = useRef(partyCatQueue);
+  const partyCompRef = useRef(partyComp);
+  const gameModeRef = useRef(gameMode);
 
   enemyRef.current = enemy;
   playerRef.current = player;
@@ -1651,6 +1685,13 @@ function useGameEngine() {
   sceneRef.current = scene;
   autoEnabledRef.current = autoEnabled;
   autoPausedRef.current = autoPaused;
+  partyMembersRef.current = partyMembers;
+  partyEnemyRef.current = partyEnemy;
+  partyFloorRef.current = partyFloor;
+  partyRunCoinsRef.current = partyRunCoins;
+  partyCatQueueRef.current = partyCatQueue;
+  partyCompRef.current = partyComp;
+  gameModeRef.current = gameMode;
 
   useEffect(() => {
     setAccessMode(getAccessMode());
@@ -3287,11 +3328,226 @@ function useGameEngine() {
     }
   }
 
+  // ── Party Mode (Phase 2 vertical slice) ──
+
+  function appendPartyLog(message) {
+    setPartyLog((prev) => [...prev.slice(-24), message]);
+  }
+
+  function initPartyCatTurn(members) {
+    const queue = partyActOrderIndices(members ?? partyMembersRef.current);
+    setPartyCatQueue(queue);
+    setPartyTurnPhase("cats");
+    setPartyActiveCatIndex(queue.length > 0 ? queue[0] : null);
+  }
+
+  function startPartyRun(comp) {
+    if (!isValidPartyComp(comp)) return;
+    clearAllTimers();
+    unlockGameAudio();
+    playSfx("ui_confirm");
+    const floor = 1;
+    const baseSave = saveRef.current;
+    const partySkillUnlocks = applyFloorUnlocks(baseSave.partySkillUnlocks, floor);
+    const nextSave = commitSave({
+      ...baseSave,
+      lastPartyComp: comp,
+      partySkillUnlocks,
+      partyRecords: {
+        ...baseSave.partyRecords,
+        totalRuns: (baseSave.partyRecords?.totalRuns ?? 0) + 1,
+      },
+    });
+    const members = createPartyRoster(comp, floor, nextSave.partySkillUnlocks);
+    const foe = buildPartyEnemy(floor);
+    setGameMode("party");
+    setPartyComp(comp);
+    setPartyMembers(members);
+    setPartyFloor(floor);
+    setPartyRunCoins(0);
+    setPartyEnemy(foe);
+    setPartyLog([
+      `Party run begins — floor ${floor}`,
+      `${foe.icon} ${foe.name} appears`,
+    ]);
+    initPartyCatTurn(members);
+    setScene("battle");
+  }
+
+  function advancePartyCatTurn(members) {
+    const queue = [...partyCatQueueRef.current];
+    if (queue.length > 0) queue.shift();
+    if (queue.length > 0) {
+      setPartyCatQueue(queue);
+      setPartyActiveCatIndex(queue[0]);
+      return;
+    }
+    setPartyCatQueue([]);
+    setPartyActiveCatIndex(null);
+    setPartyTurnPhase("enemy");
+    schedule(350, partyEnemyTurn);
+  }
+
+  function handlePartyVictory() {
+    const floor = partyFloorRef.current;
+    const foe = partyEnemyRef.current;
+    const reward = foe?.reward ?? 10;
+    const newRunCoins = partyRunCoinsRef.current + reward;
+    setPartyRunCoins(newRunCoins);
+    appendPartyLog(`Floor ${floor} cleared! +${reward} run coins`);
+
+    let members = [...partyMembersRef.current];
+    const bossFloor = getEnemyTierForFloor(floor) === "boss";
+    if (bossFloor) {
+      const staff = partyHasStaffOfLife(saveRef.current.partySkillUnlocks, floor);
+      members = applyPostBossHeal(members, { staffOfLife: staff });
+      setPartyMembers(members);
+    }
+
+    const nextFloor = floor + 1;
+    let persisted = saveRef.current;
+    const prevBest = persisted.partyRecords?.bestFloor ?? 0;
+    if (nextFloor > prevBest) {
+      persisted = commitSave({
+        ...persisted,
+        partySkillUnlocks: applyFloorUnlocks(persisted.partySkillUnlocks, nextFloor),
+        partyRecords: {
+          ...persisted.partyRecords,
+          bestFloor: nextFloor,
+          bestComp: partyCompRef.current,
+        },
+      });
+    }
+
+    members = refreshPartyForFloor(members, nextFloor, persisted.partySkillUnlocks, {
+      fullHeal: true,
+    });
+    const nextFoe = buildPartyEnemy(nextFloor);
+    setPartyFloor(nextFloor);
+    setPartyMembers(members);
+    setPartyEnemy(nextFoe);
+    appendPartyLog(`Floor ${nextFloor} — ${nextFoe.name}`);
+    initPartyCatTurn(members);
+  }
+
+  function handlePartyWipe() {
+    appendPartyLog("Party wiped — progress reset to floor 0");
+    setPartyFloor(0);
+    setPartyMembers([]);
+    setPartyEnemy(null);
+    setPartyRunCoins(0);
+    setPartyCatQueue([]);
+    setPartyActiveCatIndex(null);
+    setScene("party-select");
+  }
+
+  function partyEnemyTurn() {
+    if (gameModeRef.current !== "party") return;
+    const members = [...partyMembersRef.current];
+    const alive = members.filter((m) => m.hp > 0 && !m.ko);
+    const foe = partyEnemyRef.current;
+    if (!foe || alive.length === 0) {
+      handlePartyWipe();
+      return;
+    }
+    const target = alive[Math.floor(Math.random() * alive.length)];
+    const targetIdx = members.findIndex((m) => m === target);
+    const dmg = Math.max(
+      1,
+      Math.round((foe.attack ?? 1) - Math.floor((target.defense ?? 0) / 2))
+    );
+    const nextHp = Math.max(0, target.hp - dmg);
+    members[targetIdx] = {
+      ...target,
+      hp: nextHp,
+      ko: nextHp <= 0,
+    };
+    setPartyMembers(members);
+    appendPartyLog(`${foe.name} hits ${target.classKey} for ${dmg}`);
+    if (isPartyWiped(members)) {
+      schedule(300, handlePartyWipe);
+      return;
+    }
+    initPartyCatTurn(members);
+  }
+
+  function partyFight() {
+    if (gameModeRef.current !== "party" || partyTurnPhase !== "cats") return;
+    const idx = partyActiveCatIndex;
+    if (idx == null) return;
+    const members = [...partyMembersRef.current];
+    const attacker = members[idx];
+    const foe = partyEnemyRef.current;
+    if (!attacker || attacker.hp <= 0 || attacker.ko || !foe) return;
+
+    const { damage } = rollFightDamage(attacker.attack, 2, false, 1.75);
+    const newHp = Math.max(0, foe.hp - damage);
+    const newEnemy = { ...foe, hp: newHp };
+    setPartyEnemy(newEnemy);
+    playSfx("hit");
+    appendPartyLog(`${attacker.classKey} fights for ${damage} damage`);
+
+    if (newHp <= 0) {
+      playSfx("kill");
+      schedule(200, handlePartyVictory);
+      return;
+    }
+    advancePartyCatTurn(members);
+  }
+
+  function partyDefend() {
+    if (gameModeRef.current !== "party" || partyTurnPhase !== "cats") return;
+    const idx = partyActiveCatIndex;
+    if (idx == null) return;
+    const members = [...partyMembersRef.current];
+    const m = members[idx];
+    if (!m) return;
+    appendPartyLog(`${m.classKey} defends`);
+    advancePartyCatTurn(members);
+  }
+
+  function partyRetreat() {
+    if (gameModeRef.current !== "party") return;
+    clearAllTimers();
+    const lost = retreatRunCoinLoss(partyRunCoinsRef.current);
+    appendPartyLog(`Retreat — lost ${lost} run coins`);
+    setPartyRunCoins(0);
+    setPartyFloor(0);
+    setPartyMembers([]);
+    setPartyEnemy(null);
+    setPartyCatQueue([]);
+    setPartyActiveCatIndex(null);
+    setScene("party-select");
+    playSfx("ui_cancel");
+  }
+
+  function exitPartyToTitle() {
+    clearAllTimers();
+    setGameMode(null);
+    setPartyComp(null);
+    setPartyMembers([]);
+    setPartyEnemy(null);
+    setPartyLog([]);
+    setPartyCatQueue([]);
+    setPartyActiveCatIndex(null);
+    setScene("title");
+  }
+
   // ── Public API ──
 
   return {
     // State
     scene,
+    gameMode,
+    partyComp,
+    partyMembers,
+    partyFloor,
+    partyRunCoins,
+    partyLog,
+    partyEnemy,
+    partyCatQueue,
+    partyActiveCatIndex,
+    partyTurnPhase,
     selectedClassKey,
     player,
     enemy,
@@ -3337,6 +3593,12 @@ function useGameEngine() {
 
     // Actions
     setScene,
+    setGameMode,
+    startPartyRun,
+    partyFight,
+    partyDefend,
+    partyRetreat,
+    exitPartyToTitle,
     setLocalePreference,
     setLicenseModalOpen,
     setLicenseError,
@@ -4082,6 +4344,7 @@ const BattleHUD = memo(function BattleHUD({
 
 function TitleScreen({
   onStart,
+  onStartParty,
   wallet,
   allTimeRecords,
   locale,
@@ -4196,6 +4459,26 @@ function TitleScreen({
       >
         {t("title.start")}
       </button>
+
+      {onStartParty && (
+        <button
+          type="button"
+          onClick={onStartParty}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 10,
+            padding: "12px 32px",
+            borderRadius: 5,
+            cursor: "pointer",
+            border: `2px solid ${COLORS.gold}`,
+            background: `${COLORS.gold}18`,
+            color: COLORS.gold,
+            letterSpacing: 1,
+          }}
+        >
+          Party Mode
+        </button>
+      )}
 
       {onHowToFight && (
         <button
@@ -5257,7 +5540,11 @@ export default function BossRush() {
       playThemeForRound(game.round, { autoEnabled: game.autoEnabled });
     } else if (game.scene === "title") {
       playTitleMusic();
-    } else if (game.scene === "shop" || game.scene === "select") {
+    } else if (
+      game.scene === "shop" ||
+      game.scene === "select" ||
+      game.scene === "party-select"
+    ) {
       playCampMusic();
     } else if (game.scene === "paywall") {
       playTitleMusic();
@@ -5270,7 +5557,13 @@ export default function BossRush() {
     const resumeHubMusic = () => {
       unlockGameAudio();
       if (game.scene === "title") playTitleMusic();
-      else if (game.scene === "shop" || game.scene === "select") playCampMusic();
+      else if (
+        game.scene === "shop" ||
+        game.scene === "select" ||
+        game.scene === "party-select"
+      ) {
+        playCampMusic();
+      }
     };
     window.addEventListener("pointerdown", resumeHubMusic, { once: true });
     window.addEventListener("keydown", resumeHubMusic, { once: true });
@@ -5296,7 +5589,14 @@ export default function BossRush() {
             onStart={() => {
               unlockGameAudio();
               playSfx("ui_confirm");
+              game.setGameMode("solo");
               game.setScene("select");
+            }}
+            onStartParty={() => {
+              unlockGameAudio();
+              playSfx("ui_confirm");
+              game.setGameMode("party");
+              game.setScene("party-select");
             }}
             wallet={game.wallet}
             allTimeRecords={game.allTimeRecords}
@@ -5321,6 +5621,21 @@ export default function BossRush() {
             classKey="mage"
           />
         </>
+      )}
+
+      {game.scene === "party-select" && (
+        <PartySelectScreen
+          colors={COLORS}
+          screenShell={screenShellScroll}
+          lastComp={game.save.lastPartyComp}
+          partyWallet={game.save.partyWallet}
+          partyBestFloor={game.save.partyRecords?.bestFloor ?? 0}
+          onBack={() => {
+            playSfx("ui_cancel");
+            game.exitPartyToTitle();
+          }}
+          onStart={(comp) => game.startPartyRun(comp)}
+        />
       )}
 
       {game.scene === "select" && (
@@ -5352,7 +5667,26 @@ export default function BossRush() {
         />
       )}
 
-      {game.scene === "battle" && (
+      {game.scene === "battle" && game.gameMode === "party" && (
+        <PartyBattleScreen
+          colors={COLORS}
+          screenShell={screenShellScroll}
+          floor={game.partyFloor}
+          runCoins={game.partyRunCoins}
+          enemy={game.partyEnemy}
+          members={game.partyMembers}
+          log={game.partyLog}
+          catQueue={game.partyCatQueue}
+          activeCatIndex={game.partyActiveCatIndex}
+          turnPhase={game.partyTurnPhase}
+          onFight={game.partyFight}
+          onDefend={game.partyDefend}
+          onRetreat={game.partyRetreat}
+          onBackToTitle={game.exitPartyToTitle}
+        />
+      )}
+
+      {game.scene === "battle" && game.gameMode !== "party" && (
         <BattleScene
           game={game}
           musicMuted={musicMuted}

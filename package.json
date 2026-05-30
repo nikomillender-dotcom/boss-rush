@@ -15,7 +15,8 @@
     "music:themes": "node tools/prepare-theme-music.mjs",
     "music:battle": "node tools/prepare-battle-phonk.mjs",
     "music:doggod": "node tools/convert-doggod.mjs",
-    "pwa-icons": "node tools/generate-pwa-icons.mjs"
+    "pwa-icons": "node tools/generate-pwa-icons.mjs",
+    "party:balance": "node tools/party-skill-balance-test.mjs"
   },
   "dependencies": {
     "@fontsource/press-start-2p": "^5.2.5",
