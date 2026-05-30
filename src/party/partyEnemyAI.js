@@ -24,7 +24,10 @@ export function themeIdForPartyFloor(floor) {
 }
 
 export function enemyResistanceTier(enemy) {
-  if (enemy?.partyTier === "capstone" && enemy?.catalogId?.includes("doggod")) {
+  if (
+    enemy?.isDoggod ||
+    (enemy?.partyTier === "capstone" && enemy?.catalogId?.includes("doggod"))
+  ) {
     return "doggod";
   }
   if (enemy?.partyTier === "boss" || enemy?.isBoss) return "boss";
@@ -39,9 +42,21 @@ export function actionsThisTurn(enemy) {
 /**
  * Pick an attack line for one enemy action. Returns { damageMult, label, applyBurn }.
  */
-export function pickEnemyAction(enemy, rng = Math.random) {
+export function pickEnemyAction(enemy, rng = Math.random, { targets = [] } = {}) {
   const tier = enemy?.partyTier ?? "trash";
   const r = rng();
+  if (enemy?.isDoggod) {
+    const wounded = targets.filter(
+      (t) => t.hp > 0 && !t.ko && t.maxHp > 0 && t.hp / t.maxHp < 0.25
+    );
+    if (wounded.length && r < 0.35) {
+      return { damageMult: 9, label: "Judgment", applyBurn: false, execute: true };
+    }
+    if (r < 0.2) return { damageMult: 1.6, label: "all-seeing strike", applyBurn: false };
+    if (r < 0.45) return { damageMult: 1.35, label: "divine rend", applyBurn: false };
+    if (r < 0.7) return { damageMult: 1.1, label: "leash snap", applyBurn: false };
+    return { damageMult: 0.9, label: "omniscient howl", applyBurn: false };
+  }
   if (tier === "boss" || tier === "capstone") {
     if (r < 0.35) return { damageMult: 1.4, label: "crush", applyBurn: false };
     if (r < 0.6) return { damageMult: 1.1, label: "rend", applyBurn: false };
@@ -70,7 +85,9 @@ export function resolveEnemyHit({
   targetIndex,
   rng = Math.random,
 }) {
-  const action = pickEnemyAction(enemy, rng);
+  const action = pickEnemyAction(enemy, rng, {
+    targets: partyMembers.filter((m) => m.hp > 0 && !m.ko),
+  });
   let damage = Math.max(
     1,
     Math.round((enemy.attack ?? 1) * action.damageMult - Math.floor((target.defense ?? 0) / 2))
