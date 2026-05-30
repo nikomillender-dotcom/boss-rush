@@ -148,6 +148,7 @@ import {
   executePartyFight,
   executePartyDefend,
   executePartySkill,
+  listPartySkills,
   listReadySkills,
   needsAllyTarget,
   tickEnemyDot,
@@ -3697,6 +3698,14 @@ function useGameEngine() {
     return listReadySkills(m, partyEquipmentMap()[m.classKey]);
   }
 
+  function partyAllSkillsForActive() {
+    const idx = partyActiveCatIndex;
+    if (idx == null) return [];
+    const m = partyMembersRef.current[idx];
+    if (!m) return [];
+    return listPartySkills(m);
+  }
+
   function spendPartyWallet(price) {
     if (!canAfford(saveRef.current.partyWallet, price)) {
       playSfx("ui_error");
@@ -3799,6 +3808,7 @@ function useGameEngine() {
     partyBuffs,
     partyPendingSkillId,
     partyReadySkillsForActive,
+    partyAllSkillsForActive,
     selectedClassKey,
     player,
     enemy,
@@ -5947,29 +5957,40 @@ export default function BossRush() {
         />
       )}
 
-      {game.scene === "battle" && game.gameMode === "party" && (
-        <PartyBattleScreen
-          colors={COLORS}
-          screenShell={screenShellScroll}
-          floor={game.partyFloor}
-          runCoins={game.partyRunCoins}
-          enemy={game.partyEnemy}
-          members={game.partyMembers}
-          log={game.partyLog}
-          catQueue={game.partyCatQueue}
-          activeCatIndex={game.partyActiveCatIndex}
-          turnPhase={game.partyTurnPhase}
-          readySkills={game.partyReadySkillsForActive()}
-          pendingSkill={game.partyPendingSkillId}
-          onFight={game.partyFight}
-          onDefend={game.partyDefend}
-          onSkill={game.partyUseSkill}
-          onPickAlly={game.partyPickAlly}
-          onCancelTarget={game.partyCancelTarget}
-          onRetreat={game.partyRetreat}
-          onBackToTitle={game.exitPartyToTitle}
-        />
-      )}
+      {game.scene === "battle" && game.gameMode === "party" && (() => {
+        const pendingId = game.partyPendingSkillId;
+        const activeIdx = game.partyActiveCatIndex;
+        const activeMember =
+          activeIdx != null ? game.partyMembers[activeIdx] : null;
+        const pendingSkill =
+          pendingId && activeMember
+            ? getPartySkill(activeMember.classKey, pendingId)
+            : null;
+        return (
+          <PartyBattleScreen
+            colors={COLORS}
+            screenShell={screenShellScroll}
+            floor={game.partyFloor}
+            runCoins={game.partyRunCoins}
+            enemy={game.partyEnemy}
+            members={game.partyMembers}
+            log={game.partyLog}
+            catQueue={game.partyCatQueue}
+            activeCatIndex={game.partyActiveCatIndex}
+            turnPhase={game.partyTurnPhase}
+            allSkills={game.partyAllSkillsForActive()}
+            pendingSkillId={pendingId}
+            pendingSkillName={pendingSkill?.name}
+            onFight={game.partyFight}
+            onDefend={game.partyDefend}
+            onSkill={game.partyUseSkill}
+            onPickAlly={game.partyPickAlly}
+            onCancelTarget={game.partyCancelTarget}
+            onRetreat={game.partyRetreat}
+            onBackToTitle={game.exitPartyToTitle}
+          />
+        );
+      })()}
 
       {game.scene === "battle" && game.gameMode !== "party" && (
         <BattleScene

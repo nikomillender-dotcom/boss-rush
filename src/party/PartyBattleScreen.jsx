@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { PARTY_CLASS_NAMES } from "../content/classDefinitions.js";
-import { partyActOrderIndices } from "../combat/turnSystem.js";
+import { t } from "../i18n/index.js";
+import PartyCommandDock from "./PartyCommandDock.jsx";
 
 /**
- * Party battle: enemy top, log middle, party bottom, compact skill boxes.
+ * Party battle: enemy top, log middle, party bottom, active-cat command dock.
  */
 export default function PartyBattleScreen({
   colors,
@@ -15,8 +17,9 @@ export default function PartyBattleScreen({
   catQueue,
   activeCatIndex,
   turnPhase,
-  readySkills,
-  pendingSkill,
+  allSkills = [],
+  pendingSkillId,
+  pendingSkillName,
   onFight,
   onDefend,
   onSkill,
@@ -25,16 +28,27 @@ export default function PartyBattleScreen({
   onRetreat,
   onBackToTitle,
 }) {
+  const [highlightedSkill, setHighlightedSkill] = useState(null);
+
   const activeMember =
     activeCatIndex != null && members[activeCatIndex] ? members[activeCatIndex] : null;
-  const queueLabel =
+  const classDisplayName = PARTY_CLASS_NAMES[activeMember?.classKey] ?? "Cat";
+
+  let queueLabel =
     turnPhase === "enemy"
-      ? "Enemy turn"
-      : pendingSkill
-        ? "Pick ally target"
+      ? t("party.battle.enemyTurn")
+      : pendingSkillId
+        ? t("party.battle.pickAlly", { skill: pendingSkillName ?? "Skill" })
         : catQueue?.length
-          ? `${PARTY_CLASS_NAMES[activeMember?.classKey] ?? "Cat"} acts`
-          : "Round end";
+          ? t("party.battle.catActs", { name: classDisplayName })
+          : t("party.battle.roundEnd");
+
+  if (highlightedSkill && !pendingSkillId && turnPhase === "cats") {
+    const cdText = highlightedSkill.ready
+      ? t("party.battle.ready")
+      : `CD:${highlightedSkill.cooldownLeft}`;
+    queueLabel = `${highlightedSkill.name} · ${cdText}`;
+  }
 
   const hpPct = enemy ? Math.round((enemy.hp / enemy.maxHp) * 100) : 0;
 
@@ -120,7 +134,25 @@ export default function PartyBattleScreen({
         ))}
       </section>
 
-      <div style={{ fontSize: 6, color: colors.muted, marginBottom: 6 }}>{queueLabel}</div>
+      <div style={{ fontSize: 6, color: colors.muted, marginBottom: 6, textAlign: "center" }}>
+        {queueLabel}
+      </div>
+
+      {pendingSkillId && (
+        <div
+          style={{
+            fontSize: 7,
+            color: colors.gold,
+            textAlign: "center",
+            marginBottom: 8,
+            padding: "6px 8px",
+            border: `1px solid ${colors.gold}`,
+            borderRadius: 4,
+          }}
+        >
+          {t("party.battle.pickAllyBanner", { skill: pendingSkillName ?? "Skill" })}
+        </div>
+      )}
 
       <section
         style={{
@@ -132,8 +164,8 @@ export default function PartyBattleScreen({
         }}
       >
         {members.map((m, idx) => {
-          const isActive = idx === activeCatIndex && turnPhase === "cats" && !pendingSkill;
-          const pickTarget = Boolean(pendingSkill);
+          const isActive = idx === activeCatIndex && turnPhase === "cats" && !pendingSkillId;
+          const pickTarget = Boolean(pendingSkillId);
           const down = m.hp <= 0 || m.ko;
           return (
             <button
@@ -169,25 +201,20 @@ export default function PartyBattleScreen({
         })}
       </section>
 
-      {turnPhase === "cats" && activeMember && !pendingSkill && (
-        <section style={{ width: "100%", marginBottom: 10 }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-            <ActionBtn colors={colors} label="FIGHT" onClick={onFight} primary />
-            <ActionBtn colors={colors} label="DEF" onClick={onDefend} />
-            {(readySkills ?? []).map((sk) => (
-              <ActionBtn
-                key={sk.id}
-                colors={colors}
-                label={sk.abbr}
-                title={`${sk.name} (CD ${sk.cooldown})`}
-                onClick={() => onSkill(sk.id)}
-              />
-            ))}
-          </div>
-        </section>
+      {turnPhase === "cats" && activeMember && !pendingSkillId && (
+        <PartyCommandDock
+          colors={colors}
+          classDisplayName={classDisplayName}
+          skills={allSkills}
+          onFight={onFight}
+          onDefend={onDefend}
+          onSkill={onSkill}
+          highlightedSkillId={highlightedSkill?.id}
+          onHighlightSkill={setHighlightedSkill}
+        />
       )}
 
-      {pendingSkill && (
+      {pendingSkillId && (
         <button
           type="button"
           onClick={onCancelTarget}
@@ -199,47 +226,28 @@ export default function PartyBattleScreen({
             background: "transparent",
             border: "none",
             cursor: "pointer",
+            width: "100%",
           }}
         >
-          Cancel targeting
+          {t("party.battle.cancelTarget")}
         </button>
       )}
 
       {turnPhase === "enemy" && (
-        <div style={{ fontSize: 7, color: colors.gold, marginBottom: 8 }}>Enemy acts…</div>
+        <div style={{ fontSize: 7, color: colors.gold, marginBottom: 8, textAlign: "center" }}>
+          {t("party.battle.enemyActs")}
+        </div>
       )}
 
       <footer style={{ width: "100%", textAlign: "center" }}>
         <button type="button" onClick={onRetreat} style={retreatStyle}>
-          Retreat
+          {t("party.battle.retreat")}
         </button>
         <button type="button" onClick={onBackToTitle} style={titleStyle}>
-          Title
+          {t("party.battle.title")}
         </button>
       </footer>
     </div>
-  );
-}
-
-function ActionBtn({ colors, label, onClick, primary, title }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      style={{
-        fontFamily: "'Press Start 2P', monospace",
-        fontSize: 7,
-        padding: "10px 12px",
-        minWidth: 44,
-        cursor: "pointer",
-        border: `2px solid ${primary ? colors.fightBorder : colors.surfaceBorder}`,
-        background: primary ? `${colors.fight}22` : colors.surface,
-        color: primary ? colors.fight : colors.dimmed,
-      }}
-    >
-      {label}
-    </button>
   );
 }
 

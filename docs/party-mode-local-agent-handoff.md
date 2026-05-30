@@ -1,6 +1,8 @@
 # Party Mode — Local Agent Handoff
 
-**Read this first.** Then use [party-mode-canonical-handoff.md](./party-mode-canonical-handoff.md) for full design detail.
+**Phase 4+ → see [party-mode-phase4-agent-handoff.md](./party-mode-phase4-agent-handoff.md).**
+
+**Read this first** for Phases 1–3 history. Then use [party-mode-canonical-handoff.md](./party-mode-canonical-handoff.md) for full design detail.
 
 ---
 
