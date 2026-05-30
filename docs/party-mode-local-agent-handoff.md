@@ -308,3 +308,34 @@ tools/
 ---
 
 *Phase 2 vertical slice landed on `cursor/party-mode-phase2-engine-0d7a`.*
+
+---
+
+## Phase 3 — Content + UI polish
+
+Goal: camp loop, wired skills, enemy variety, polished battle/select UI.
+
+### Definition of done (Phase 3)
+
+- [x] Party camp (`party-shop`) after each floor; run coins deposit to `partyWallet`
+- [x] Shop: weapon, armor, skill potency at **0.4×** prices
+- [x] All party skills executable via compact skill buttons + ally targeting
+- [x] Enemy tier actions + Hell burn-on-hit theme passive
+- [x] Battle layout polish (HP bar, skill abbr, active cat border)
+- [x] Party select **4×4** grid (bases + grayed combos / `??` slots)
+- [x] `party-skill-balance-test.mjs` still passes; `party:combat` smoke test added
+
+### New / updated files (Phase 3)
+
+| File | Role |
+| --- | --- |
+| `src/party/partyCombat.js` | Skill + fight resolver |
+| `src/party/partyShop.js` | 0.4× camp prices |
+| `src/party/partyEnemyAI.js` | Tier attacks + Hell burn |
+| `src/party/partyEquipment.js` | Weapon/armor/potency on stats |
+| `src/party/PartyShopScreen.jsx` | Camp UI |
+| `tools/party-combat-smoke-test.mjs` | Resolver smoke tests |
+
+### Deferred (Phase 4)
+
+- Doggod 3-action kit, freeplay 2000+, per-boss passive spreadsheet, combo party kits, full i18n pass
