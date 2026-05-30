@@ -69,5 +69,9 @@ export function buildPartyMember(classKey, level, unlockedSkillIds = []) {
     statuses: {},
     ko: false,
     unlockedSkillIds: [...unlockedSkillIds],
+    cooldowns: {},
+    defendActive: false,
+    partyBlock: false,
+    reflect: null,
   };
 }

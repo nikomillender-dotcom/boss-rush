@@ -1,7 +1,8 @@
+import { PARTY_CLASS_NAMES } from "../content/classDefinitions.js";
 import { partyActOrderIndices } from "../combat/turnSystem.js";
 
 /**
- * Minimal party battle UI: enemy panel, log, four cats, fight/defend/run.
+ * Party battle: enemy top, log middle, party bottom, compact skill boxes.
  */
 export default function PartyBattleScreen({
   colors,
@@ -14,8 +15,13 @@ export default function PartyBattleScreen({
   catQueue,
   activeCatIndex,
   turnPhase,
+  readySkills,
+  pendingSkill,
   onFight,
   onDefend,
+  onSkill,
+  onPickAlly,
+  onCancelTarget,
   onRetreat,
   onBackToTitle,
 }) {
@@ -24,16 +30,26 @@ export default function PartyBattleScreen({
   const queueLabel =
     turnPhase === "enemy"
       ? "Enemy turn"
-      : catQueue?.length
-        ? `Cat ${catQueue[0] + 1} acts next`
-        : "Round end";
+      : pendingSkill
+        ? "Pick ally target"
+        : catQueue?.length
+          ? `${PARTY_CLASS_NAMES[activeMember?.classKey] ?? "Cat"} acts`
+          : "Round end";
+
+  const hpPct = enemy ? Math.round((enemy.hp / enemy.maxHp) * 100) : 0;
 
   return (
-    <div style={{ ...screenShell, animation: "fadeUp 0.25s ease" }}>
-      <div
+    <div
+      style={{
+        ...screenShell,
+        animation: "fadeUp 0.25s ease",
+        paddingBottom: 12,
+        maxWidth: 400,
+      }}
+    >
+      <header
         style={{
           width: "100%",
-          maxWidth: 360,
           display: "flex",
           justifyContent: "space-between",
           fontSize: 7,
@@ -41,168 +57,210 @@ export default function PartyBattleScreen({
           marginBottom: 8,
         }}
       >
-        <span>Floor {floor} (party level)</span>
+        <span>Floor {floor}</span>
         <span>Run 💰 {runCoins}</span>
-      </div>
+      </header>
 
       {enemy && (
-        <div
+        <section
           style={{
             width: "100%",
-            maxWidth: 360,
             padding: 12,
-            marginBottom: 10,
+            marginBottom: 8,
             border: `1px solid ${colors.arenaBorder}`,
             borderRadius: 6,
             textAlign: "center",
           }}
         >
-          <div style={{ fontSize: 20 }}>{enemy.icon}</div>
+          <div style={{ fontSize: 22 }}>{enemy.icon}</div>
           <div style={{ fontSize: 8, color: colors.gold }}>{enemy.name}</div>
-          <div style={{ fontSize: 7, color: colors.muted, marginTop: 4 }}>
-            HP {enemy.hp}/{enemy.maxHp} · ATK {enemy.attack} · {enemy.partyTier ?? enemy.tier}
+          <div
+            style={{
+              height: 6,
+              marginTop: 8,
+              background: "#1a1a28",
+              borderRadius: 3,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${hpPct}%`,
+                height: "100%",
+                background: colors.fight,
+                transition: "width 0.2s",
+              }}
+            />
           </div>
-        </div>
+          <div style={{ fontSize: 6, color: colors.muted, marginTop: 4 }}>
+            {enemy.hp}/{enemy.maxHp} · {enemy.partyTier ?? enemy.tier}
+            {enemy.blindActionsLeft > 0 ? ` · blind ${enemy.blindActionsLeft}` : ""}
+          </div>
+        </section>
       )}
 
-      <div
+      <section
         style={{
           width: "100%",
-          maxWidth: 360,
-          minHeight: 72,
-          maxHeight: 120,
+          flex: 1,
+          minHeight: 80,
+          maxHeight: 110,
           overflowY: "auto",
           fontSize: 6,
           color: colors.dimmed,
           lineHeight: 1.7,
-          marginBottom: 10,
+          marginBottom: 8,
           padding: 8,
           border: `1px solid ${colors.surfaceBorder}`,
           borderRadius: 4,
         }}
       >
-        {(log ?? []).slice(-8).map((line, i) => (
+        {(log ?? []).slice(-10).map((line, i) => (
           <div key={i}>{line}</div>
         ))}
-      </div>
+      </section>
 
-      <div style={{ fontSize: 6, color: colors.muted, marginBottom: 8 }}>{queueLabel}</div>
+      <div style={{ fontSize: 6, color: colors.muted, marginBottom: 6 }}>{queueLabel}</div>
 
-      <div
+      <section
         style={{
           width: "100%",
-          maxWidth: 360,
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
-          gap: 8,
-          marginBottom: 12,
+          gap: 6,
+          marginBottom: 10,
         }}
       >
         {members.map((m, idx) => {
-          const isActive = idx === activeCatIndex && turnPhase === "cats";
+          const isActive = idx === activeCatIndex && turnPhase === "cats" && !pendingSkill;
+          const pickTarget = Boolean(pendingSkill);
           const down = m.hp <= 0 || m.ko;
           return (
-            <div
+            <button
               key={`${m.classKey}-${idx}`}
+              type="button"
+              disabled={!pickTarget || down}
+              onClick={() => pickTarget && onPickAlly(idx)}
               style={{
                 padding: 8,
-                border: `2px solid ${isActive ? colors.gold : colors.surfaceBorder}`,
+                textAlign: "left",
+                border: `2px solid ${
+                  pickTarget && !down
+                    ? colors.gold
+                    : isActive
+                      ? colors.gold
+                      : colors.surfaceBorder
+                }`,
                 borderRadius: 4,
-                opacity: down ? 0.45 : 1,
+                opacity: down ? 0.4 : 1,
                 background: colors.surface,
+                cursor: pickTarget && !down ? "pointer" : "default",
               }}
             >
               <div style={{ fontSize: 7, color: isActive ? colors.gold : colors.fight }}>
-                {m.classKey}
+                {PARTY_CLASS_NAMES[m.classKey] ?? m.classKey}
                 {down ? " KO" : ""}
               </div>
               <div style={{ fontSize: 6, color: colors.muted }}>
-                HP {m.hp}/{m.maxHp} SPD {m.speed}
+                {m.hp}/{m.maxHp}
               </div>
-            </div>
+            </button>
           );
         })}
-      </div>
+      </section>
 
-      <div style={{ fontSize: 6, color: colors.muted, marginBottom: 8 }}>
-        Speed order:{" "}
-        {partyActOrderIndices(members)
-          .map((i) => members[i]?.classKey)
-          .join(" → ")}
-      </div>
+      {turnPhase === "cats" && activeMember && !pendingSkill && (
+        <section style={{ width: "100%", marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+            <ActionBtn colors={colors} label="FIGHT" onClick={onFight} primary />
+            <ActionBtn colors={colors} label="DEF" onClick={onDefend} />
+            {(readySkills ?? []).map((sk) => (
+              <ActionBtn
+                key={sk.id}
+                colors={colors}
+                label={sk.abbr}
+                title={`${sk.name} (CD ${sk.cooldown})`}
+                onClick={() => onSkill(sk.id)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
-      {turnPhase === "cats" && activeMember && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-          <button
-            type="button"
-            onClick={onFight}
-            style={{
-              fontFamily: "'Press Start 2P', monospace",
-              fontSize: 8,
-              padding: "12px 18px",
-              cursor: "pointer",
-              border: `2px solid ${colors.fightBorder}`,
-              background: `${colors.fight}22`,
-              color: colors.fight,
-            }}
-          >
-            Fight ({activeMember.classKey})
-          </button>
-          <button
-            type="button"
-            onClick={onDefend}
-            style={{
-              fontFamily: "'Press Start 2P', monospace",
-              fontSize: 8,
-              padding: "12px 18px",
-              cursor: "pointer",
-              border: "1px solid #2a3a4a",
-              color: colors.dimmed,
-              background: "transparent",
-            }}
-          >
-            Defend
-          </button>
-        </div>
+      {pendingSkill && (
+        <button
+          type="button"
+          onClick={onCancelTarget}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 6,
+            marginBottom: 8,
+            color: colors.muted,
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          Cancel targeting
+        </button>
       )}
 
       {turnPhase === "enemy" && (
-        <div style={{ fontSize: 7, color: colors.gold }}>Resolving enemy…</div>
+        <div style={{ fontSize: 7, color: colors.gold, marginBottom: 8 }}>Enemy acts…</div>
       )}
 
-      <button
-        type="button"
-        onClick={onRetreat}
-        style={{
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: 7,
-          padding: "10px 16px",
-          marginTop: 14,
-          cursor: "pointer",
-          border: "1px solid #4a3a2a",
-          color: "#ccaa66",
-          background: "transparent",
-        }}
-      >
-        Retreat (lose 50% run coins)
-      </button>
-
-      <button
-        type="button"
-        onClick={onBackToTitle}
-        style={{
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: 6,
-          padding: "8px 12px",
-          marginTop: 8,
-          cursor: "pointer",
-          border: "none",
-          color: colors.muted,
-          background: "transparent",
-        }}
-      >
-        Title
-      </button>
+      <footer style={{ width: "100%", textAlign: "center" }}>
+        <button type="button" onClick={onRetreat} style={retreatStyle}>
+          Retreat
+        </button>
+        <button type="button" onClick={onBackToTitle} style={titleStyle}>
+          Title
+        </button>
+      </footer>
     </div>
   );
 }
+
+function ActionBtn({ colors, label, onClick, primary, title }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      style={{
+        fontFamily: "'Press Start 2P', monospace",
+        fontSize: 7,
+        padding: "10px 12px",
+        minWidth: 44,
+        cursor: "pointer",
+        border: `2px solid ${primary ? colors.fightBorder : colors.surfaceBorder}`,
+        background: primary ? `${colors.fight}22` : colors.surface,
+        color: primary ? colors.fight : colors.dimmed,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+const retreatStyle = {
+  fontFamily: "'Press Start 2P', monospace",
+  fontSize: 7,
+  padding: "10px 16px",
+  marginTop: 8,
+  cursor: "pointer",
+  border: "1px solid #4a3a2a",
+  color: "#ccaa66",
+  background: "transparent",
+};
+
+const titleStyle = {
+  fontFamily: "'Press Start 2P', monospace",
+  fontSize: 6,
+  padding: "8px 12px",
+  marginTop: 6,
+  cursor: "pointer",
+  border: "none",
+  color: "#666",
+  background: "transparent",
+};

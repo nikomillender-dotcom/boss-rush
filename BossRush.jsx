@@ -57,6 +57,7 @@ import {
   canAutoSkipBoss,
   syncBossesDefeatedFromBestFloor,
   weaponTierPrice,
+  WEAPON_FIXED_PRICES,
   afterburnChip,
   afterburnCarriers,
   lifestealPercent,
@@ -121,7 +122,10 @@ import {
   FREE_PLAY_START,
 } from "./src/content/enemyThemes.js";
 import { PARTY_CLASS_KEYS } from "./src/content/classDefinitions.js";
-import { skillIdsUnlockedByFloor } from "./src/content/skillDefinitions.js";
+import {
+  skillIdsUnlockedByFloor,
+  getPartySkill,
+} from "./src/content/skillDefinitions.js";
 import { getEnemyTierForFloor } from "./src/battle/scaling.js";
 import { partyActOrderIndices } from "./src/combat/turnSystem.js";
 import {
@@ -139,6 +143,28 @@ import {
 } from "./src/party/partyState.js";
 import PartySelectScreen from "./src/party/PartySelectScreen.jsx";
 import PartyBattleScreen from "./src/party/PartyBattleScreen.jsx";
+import PartyShopScreen from "./src/party/PartyShopScreen.jsx";
+import {
+  executePartyFight,
+  executePartyDefend,
+  executePartySkill,
+  listReadySkills,
+  needsAllyTarget,
+  tickEnemyDot,
+  tickPartyBuffs,
+  tickPartyCooldowns,
+} from "./src/party/partyCombat.js";
+import {
+  actionsThisTurn,
+  resolveEnemyHit,
+} from "./src/party/partyEnemyAI.js";
+import {
+  canAfford,
+  weaponUpgradePrice,
+  armorUpgradePrice,
+  potencyUpgradePrice,
+} from "./src/party/partyShop.js";
+import { PARTY_ARMOR_PRICES } from "./src/party/partyShop.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURATION — tweak these to balance the game
@@ -1607,6 +1633,9 @@ function useGameEngine() {
   const [partyCatQueue, setPartyCatQueue] = useState([]);
   const [partyActiveCatIndex, setPartyActiveCatIndex] = useState(null);
   const [partyTurnPhase, setPartyTurnPhase] = useState("cats"); // cats | enemy
+  const [partyBuffs, setPartyBuffs] = useState({});
+  const [partyBattleFlags, setPartyBattleFlags] = useState({});
+  const [partyPendingSkillId, setPartyPendingSkillId] = useState(null);
   const [selectedClassKey, setSelectedClassKey] = useState(null);
   const selectedClassKeyRef = useRef(null);
   selectedClassKeyRef.current = selectedClassKey;
@@ -1669,6 +1698,8 @@ function useGameEngine() {
   const partyRunCoinsRef = useRef(partyRunCoins);
   const partyCatQueueRef = useRef(partyCatQueue);
   const partyCompRef = useRef(partyComp);
+  const partyBuffsRef = useRef(partyBuffs);
+  const partyBattleFlagsRef = useRef(partyBattleFlags);
   const gameModeRef = useRef(gameMode);
 
   enemyRef.current = enemy;
@@ -1691,6 +1722,8 @@ function useGameEngine() {
   partyRunCoinsRef.current = partyRunCoins;
   partyCatQueueRef.current = partyCatQueue;
   partyCompRef.current = partyComp;
+  partyBuffsRef.current = partyBuffs;
+  partyBattleFlagsRef.current = partyBattleFlags;
   gameModeRef.current = gameMode;
 
   useEffect(() => {
@@ -3328,10 +3361,14 @@ function useGameEngine() {
     }
   }
 
-  // ── Party Mode (Phase 2 vertical slice) ──
+  // ── Party Mode (Phase 2 engine + Phase 3 skills/shop/AI) ──
 
   function appendPartyLog(message) {
     setPartyLog((prev) => [...prev.slice(-24), message]);
+  }
+
+  function partyEquipmentMap() {
+    return saveRef.current.partyEquipment ?? {};
   }
 
   function initPartyCatTurn(members) {
@@ -3339,6 +3376,35 @@ function useGameEngine() {
     setPartyCatQueue(queue);
     setPartyTurnPhase("cats");
     setPartyActiveCatIndex(queue.length > 0 ? queue[0] : null);
+    setPartyPendingSkillId(null);
+  }
+
+  function depositPartyRunCoins() {
+    const coins = partyRunCoinsRef.current;
+    if (coins <= 0) return saveRef.current;
+    const next = commitSave({
+      ...saveRef.current,
+      partyWallet: (saveRef.current.partyWallet ?? 0) + coins,
+    });
+    setPartyRunCoins(0);
+    return next;
+  }
+
+  function afterPartyCatAction(result, members) {
+    if (result.runCoinBonus) {
+      setPartyRunCoins((c) => c + result.runCoinBonus);
+    }
+    setPartyMembers(result.members);
+    setPartyEnemy(result.enemy);
+    setPartyBuffs(result.partyBuffs ?? {});
+    setPartyBattleFlags(result.battleFlags ?? {});
+    for (const line of result.logs ?? []) appendPartyLog(line);
+    if (result.killed) {
+      playSfx("kill");
+      schedule(200, handlePartyVictory);
+      return;
+    }
+    advancePartyCatTurn(result.members ?? members);
   }
 
   function startPartyRun(comp) {
@@ -3358,7 +3424,12 @@ function useGameEngine() {
         totalRuns: (baseSave.partyRecords?.totalRuns ?? 0) + 1,
       },
     });
-    const members = createPartyRoster(comp, floor, nextSave.partySkillUnlocks);
+    const members = createPartyRoster(
+      comp,
+      floor,
+      nextSave.partySkillUnlocks,
+      nextSave.partyEquipment
+    );
     const foe = buildPartyEnemy(floor);
     setGameMode("party");
     setPartyComp(comp);
@@ -3366,6 +3437,8 @@ function useGameEngine() {
     setPartyFloor(floor);
     setPartyRunCoins(0);
     setPartyEnemy(foe);
+    setPartyBuffs({});
+    setPartyBattleFlags({});
     setPartyLog([
       `Party run begins — floor ${floor}`,
       `${foe.icon} ${foe.name} appears`,
@@ -3392,8 +3465,7 @@ function useGameEngine() {
     const floor = partyFloorRef.current;
     const foe = partyEnemyRef.current;
     const reward = foe?.reward ?? 10;
-    const newRunCoins = partyRunCoinsRef.current + reward;
-    setPartyRunCoins(newRunCoins);
+    setPartyRunCoins((c) => c + reward);
     appendPartyLog(`Floor ${floor} cleared! +${reward} run coins`);
 
     let members = [...partyMembersRef.current];
@@ -3419,55 +3491,112 @@ function useGameEngine() {
       });
     }
 
-    members = refreshPartyForFloor(members, nextFloor, persisted.partySkillUnlocks, {
-      fullHeal: true,
-    });
-    const nextFoe = buildPartyEnemy(nextFloor);
+    members = refreshPartyForFloor(
+      members,
+      nextFloor,
+      persisted.partySkillUnlocks,
+      persisted.partyEquipment,
+      { fullHeal: true }
+    );
     setPartyFloor(nextFloor);
     setPartyMembers(members);
-    setPartyEnemy(nextFoe);
-    appendPartyLog(`Floor ${nextFloor} — ${nextFoe.name}`);
+    setPartyEnemy(null);
+    setPartyBuffs({});
+    setPartyBattleFlags({});
+    depositPartyRunCoins();
+    setScene("party-shop");
+  }
+
+  function continuePartyFromShop() {
+    const floor = partyFloorRef.current;
+    const persisted = saveRef.current;
+    const members = refreshPartyForFloor(
+      partyMembersRef.current,
+      floor,
+      persisted.partySkillUnlocks,
+      persisted.partyEquipment,
+      { fullHeal: true }
+    );
+    const foe = buildPartyEnemy(floor);
+    setPartyMembers(members);
+    setPartyEnemy(foe);
+    setPartyLog((prev) => [...prev, `Floor ${floor} — ${foe.name}`]);
     initPartyCatTurn(members);
+    setScene("battle");
+    playSfx("ui_confirm");
   }
 
   function handlePartyWipe() {
     appendPartyLog("Party wiped — progress reset to floor 0");
+    depositPartyRunCoins();
     setPartyFloor(0);
     setPartyMembers([]);
     setPartyEnemy(null);
     setPartyRunCoins(0);
     setPartyCatQueue([]);
     setPartyActiveCatIndex(null);
+    setPartyBuffs({});
+    setPartyBattleFlags({});
     setScene("party-select");
   }
 
   function partyEnemyTurn() {
     if (gameModeRef.current !== "party") return;
-    const members = [...partyMembersRef.current];
-    const alive = members.filter((m) => m.hp > 0 && !m.ko);
-    const foe = partyEnemyRef.current;
-    if (!foe || alive.length === 0) {
-      handlePartyWipe();
+    let members = [...partyMembersRef.current];
+    let foe = { ...(partyEnemyRef.current ?? {}) };
+    const floor = partyFloorRef.current;
+
+    const dotResult = tickEnemyDot(foe);
+    if (dotResult.log) appendPartyLog(dotResult.log);
+    foe = dotResult.enemy;
+    if (foe.hp <= 0) {
+      setPartyEnemy(foe);
+      schedule(200, handlePartyVictory);
       return;
     }
-    const target = alive[Math.floor(Math.random() * alive.length)];
-    const targetIdx = members.findIndex((m) => m === target);
-    const dmg = Math.max(
-      1,
-      Math.round((foe.attack ?? 1) - Math.floor((target.defense ?? 0) / 2))
-    );
-    const nextHp = Math.max(0, target.hp - dmg);
-    members[targetIdx] = {
-      ...target,
-      hp: nextHp,
-      ko: nextHp <= 0,
-    };
-    setPartyMembers(members);
-    appendPartyLog(`${foe.name} hits ${target.classKey} for ${dmg}`);
+
+    if ((foe.blindActionsLeft ?? 0) > 0) {
+      foe = { ...foe, blindActionsLeft: foe.blindActionsLeft - 1 };
+      appendPartyLog(`${foe.name} is blinded`);
+      setPartyEnemy(foe);
+    } else {
+      const acts = actionsThisTurn(foe);
+      const alive = members.filter((m) => m.hp > 0 && !m.ko);
+      if (!alive.length) {
+        handlePartyWipe();
+        return;
+      }
+      for (let a = 0; a < acts; a++) {
+        const target = alive[Math.floor(Math.random() * alive.length)];
+        const targetIdx = members.indexOf(target);
+        const hit = resolveEnemyHit({
+          enemy: foe,
+          target,
+          floor,
+          partyMembers: members,
+          targetIndex: targetIdx,
+        });
+        members = hit.members;
+        foe = hit.enemy;
+        for (const line of hit.logs) appendPartyLog(line);
+        if (foe.hp <= 0) break;
+      }
+      setPartyMembers(members);
+      setPartyEnemy(foe);
+      if (foe.hp <= 0) {
+        schedule(200, handlePartyVictory);
+        return;
+      }
+    }
+
     if (isPartyWiped(members)) {
       schedule(300, handlePartyWipe);
       return;
     }
+
+    const buffed = tickPartyBuffs(partyBuffsRef.current);
+    setPartyBuffs(buffed);
+    setPartyMembers(tickPartyCooldowns(members));
     initPartyCatTurn(members);
   }
 
@@ -3480,19 +3609,23 @@ function useGameEngine() {
     const foe = partyEnemyRef.current;
     if (!attacker || attacker.hp <= 0 || attacker.ko || !foe) return;
 
-    const { damage } = rollFightDamage(attacker.attack, 2, false, 1.75);
-    const newHp = Math.max(0, foe.hp - damage);
-    const newEnemy = { ...foe, hp: newHp };
-    setPartyEnemy(newEnemy);
+    const result = executePartyFight({
+      attacker,
+      enemy: foe,
+      partyBuffs: partyBuffsRef.current,
+      equipment: partyEquipmentMap()[attacker.classKey],
+    });
     playSfx("hit");
-    appendPartyLog(`${attacker.classKey} fights for ${damage} damage`);
-
-    if (newHp <= 0) {
-      playSfx("kill");
-      schedule(200, handlePartyVictory);
-      return;
-    }
-    advancePartyCatTurn(members);
+    afterPartyCatAction(
+      {
+        members,
+        enemy: result.enemy,
+        partyBuffs: partyBuffsRef.current,
+        logs: result.logs,
+        killed: result.killed,
+      },
+      members
+    );
   }
 
   function partyDefend() {
@@ -3502,8 +3635,115 @@ function useGameEngine() {
     const members = [...partyMembersRef.current];
     const m = members[idx];
     if (!m) return;
-    appendPartyLog(`${m.classKey} defends`);
-    advancePartyCatTurn(members);
+    const { member, logs } = executePartyDefend(m);
+    members[idx] = member;
+    afterPartyCatAction(
+      { members, enemy: partyEnemyRef.current, logs, killed: false },
+      members
+    );
+  }
+
+  function partyUseSkill(skillId) {
+    if (gameModeRef.current !== "party" || partyTurnPhase !== "cats") return;
+    const idx = partyActiveCatIndex;
+    if (idx == null) return;
+    const members = partyMembersRef.current;
+    const caster = members[idx];
+    const skill = getPartySkill(caster.classKey, skillId);
+    if (!skill) return;
+    if (needsAllyTarget(skill)) {
+      setPartyPendingSkillId(skillId);
+      return;
+    }
+    partyResolveSkill(skillId, idx);
+  }
+
+  function partyResolveSkill(skillId, casterIndex, targetIndex = null) {
+    const members = [...partyMembersRef.current];
+    const caster = members[casterIndex];
+    const skill = getPartySkill(caster.classKey, skillId);
+    if (!skill) return;
+    const equipMap = partyEquipmentMap();
+    const result = executePartySkill({
+      skill,
+      casterIndex,
+      members,
+      enemy: partyEnemyRef.current,
+      partyBuffs: partyBuffsRef.current,
+      targetIndex,
+      equipmentByClass: equipMap,
+      floor: partyFloorRef.current,
+      battleFlags: partyBattleFlagsRef.current,
+    });
+    playSfx(sfxForSkill({ icon: skill.icon, name: skill.name }));
+    setPartyPendingSkillId(null);
+    afterPartyCatAction(result, members);
+  }
+
+  function partyPickAlly(targetIndex) {
+    if (!partyPendingSkillId) return;
+    partyResolveSkill(partyPendingSkillId, partyActiveCatIndex, targetIndex);
+  }
+
+  function partyCancelTarget() {
+    setPartyPendingSkillId(null);
+  }
+
+  function partyReadySkillsForActive() {
+    const idx = partyActiveCatIndex;
+    if (idx == null) return [];
+    const m = partyMembersRef.current[idx];
+    if (!m) return [];
+    return listReadySkills(m, partyEquipmentMap()[m.classKey]);
+  }
+
+  function spendPartyWallet(price) {
+    if (!canAfford(saveRef.current.partyWallet, price)) {
+      playSfx("ui_error");
+      return false;
+    }
+    commitSave({
+      ...saveRef.current,
+      partyWallet: saveRef.current.partyWallet - price,
+    });
+    playSfx("camp_buy");
+    return true;
+  }
+
+  function buyPartyWeapon(classKey) {
+    const equip = saveRef.current.partyEquipment?.[classKey] ?? {};
+    const nextTier = (equip.weaponTier ?? 0) + 1;
+    if (nextTier >= WEAPON_FIXED_PRICES.length) return;
+    const price = weaponUpgradePrice(classKey, nextTier);
+    if (!spendPartyWallet(price)) return;
+    const partyEquipment = { ...saveRef.current.partyEquipment };
+    partyEquipment[classKey] = { ...equip, weaponTier: nextTier };
+    commitSave({ ...saveRef.current, partyEquipment });
+  }
+
+  function buyPartyArmor(classKey) {
+    const equip = saveRef.current.partyEquipment?.[classKey] ?? {};
+    const nextTier = (equip.armorTier ?? 0) + 1;
+    if (nextTier >= PARTY_ARMOR_PRICES.length) return;
+    const price = armorUpgradePrice(nextTier);
+    if (!spendPartyWallet(price)) return;
+    const partyEquipment = { ...saveRef.current.partyEquipment };
+    partyEquipment[classKey] = { ...equip, armorTier: nextTier };
+    commitSave({ ...saveRef.current, partyEquipment });
+  }
+
+  function buyPartyPotency(classKey, skillId) {
+    const skill = getPartySkill(classKey, skillId);
+    const equip = saveRef.current.partyEquipment?.[classKey] ?? {};
+    const level = equip.skillPotency?.[skillId] ?? 0;
+    const price = potencyUpgradePrice(skill, level);
+    if (!spendPartyWallet(price)) return;
+    const partyEquipment = { ...saveRef.current.partyEquipment };
+    partyEquipment[classKey] = {
+      ...equip,
+      skillPotency: { ...equip.skillPotency, [skillId]: level + 1 },
+    };
+    commitSave({ ...saveRef.current, partyEquipment });
   }
 
   function partyRetreat() {
@@ -3511,18 +3751,23 @@ function useGameEngine() {
     clearAllTimers();
     const lost = retreatRunCoinLoss(partyRunCoinsRef.current);
     appendPartyLog(`Retreat — lost ${lost} run coins`);
+    depositPartyRunCoins();
     setPartyRunCoins(0);
     setPartyFloor(0);
     setPartyMembers([]);
     setPartyEnemy(null);
     setPartyCatQueue([]);
     setPartyActiveCatIndex(null);
+    setPartyBuffs({});
+    setPartyBattleFlags({});
+    setPartyPendingSkillId(null);
     setScene("party-select");
     playSfx("ui_cancel");
   }
 
   function exitPartyToTitle() {
     clearAllTimers();
+    depositPartyRunCoins();
     setGameMode(null);
     setPartyComp(null);
     setPartyMembers([]);
@@ -3530,6 +3775,9 @@ function useGameEngine() {
     setPartyLog([]);
     setPartyCatQueue([]);
     setPartyActiveCatIndex(null);
+    setPartyBuffs({});
+    setPartyBattleFlags({});
+    setPartyPendingSkillId(null);
     setScene("title");
   }
 
@@ -3548,6 +3796,9 @@ function useGameEngine() {
     partyCatQueue,
     partyActiveCatIndex,
     partyTurnPhase,
+    partyBuffs,
+    partyPendingSkillId,
+    partyReadySkillsForActive,
     selectedClassKey,
     player,
     enemy,
@@ -3597,7 +3848,14 @@ function useGameEngine() {
     startPartyRun,
     partyFight,
     partyDefend,
+    partyUseSkill,
+    partyPickAlly,
+    partyCancelTarget,
     partyRetreat,
+    continuePartyFromShop,
+    buyPartyWeapon,
+    buyPartyArmor,
+    buyPartyPotency,
     exitPartyToTitle,
     setLocalePreference,
     setLicenseModalOpen,
@@ -5543,7 +5801,8 @@ export default function BossRush() {
     } else if (
       game.scene === "shop" ||
       game.scene === "select" ||
-      game.scene === "party-select"
+      game.scene === "party-select" ||
+      game.scene === "party-shop"
     ) {
       playCampMusic();
     } else if (game.scene === "paywall") {
@@ -5560,7 +5819,8 @@ export default function BossRush() {
       else if (
         game.scene === "shop" ||
         game.scene === "select" ||
-        game.scene === "party-select"
+        game.scene === "party-select" ||
+        game.scene === "party-shop"
       ) {
         playCampMusic();
       }
@@ -5630,11 +5890,31 @@ export default function BossRush() {
           lastComp={game.save.lastPartyComp}
           partyWallet={game.save.partyWallet}
           partyBestFloor={game.save.partyRecords?.bestFloor ?? 0}
+          comboKeys={COMBO_CLASS_KEYS}
+          comboUnlocked={(key) => isComboUnlockedBySave(game.save, key)}
+          getComboLabel={(key) => COMBO_CLASSES[key]?.name ?? key}
           onBack={() => {
             playSfx("ui_cancel");
             game.exitPartyToTitle();
           }}
           onStart={(comp) => game.startPartyRun(comp)}
+        />
+      )}
+
+      {game.scene === "party-shop" && game.partyComp && (
+        <PartyShopScreen
+          colors={COLORS}
+          screenShell={screenShellScroll}
+          comp={game.partyComp}
+          floor={game.partyFloor}
+          partyWallet={game.save.partyWallet}
+          equipment={game.save.partyEquipment}
+          skillUnlocks={game.save.partySkillUnlocks}
+          onBuyWeapon={game.buyPartyWeapon}
+          onBuyArmor={game.buyPartyArmor}
+          onBuyPotency={game.buyPartyPotency}
+          onContinue={() => game.continuePartyFromShop()}
+          onRetreat={() => game.partyRetreat()}
         />
       )}
 
@@ -5679,8 +5959,13 @@ export default function BossRush() {
           catQueue={game.partyCatQueue}
           activeCatIndex={game.partyActiveCatIndex}
           turnPhase={game.partyTurnPhase}
+          readySkills={game.partyReadySkillsForActive()}
+          pendingSkill={game.partyPendingSkillId}
           onFight={game.partyFight}
           onDefend={game.partyDefend}
+          onSkill={game.partyUseSkill}
+          onPickAlly={game.partyPickAlly}
+          onCancelTarget={game.partyCancelTarget}
           onRetreat={game.partyRetreat}
           onBackToTitle={game.exitPartyToTitle}
         />

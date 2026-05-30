@@ -15,6 +15,8 @@ import {
 import { buildPartyMember } from "./partyLeveling.js";
 import { PARTY_CLASS_KEYS } from "../content/classDefinitions.js";
 import { passiveIdsUnlockedByFloor } from "../content/skillDefinitions.js";
+import { hydratePartyMember } from "./partyEquipment.js";
+import { initCooldowns } from "./partyCombat.js";
 
 /** Solo-equivalent round for catalog lookup (party compresses progression). */
 export function partyFloorToSoloRound(partyFloor) {
@@ -63,11 +65,17 @@ export function buildPartyEnemy(partyFloor) {
 }
 
 /** Initialize four party members at the current floor with saved unlocks. */
-export function createPartyRoster(comp, floor, partySkillUnlocks) {
+export function createPartyRoster(comp, floor, partySkillUnlocks, partyEquipment = {}) {
   const keys = comp?.length === 4 ? comp : PARTY_CLASS_KEYS;
-  return keys.map((classKey) =>
-    buildPartyMember(classKey, floor, partySkillUnlocks?.[classKey] ?? [])
-  );
+  return keys.map((classKey) => {
+    const base = buildPartyMember(classKey, floor, partySkillUnlocks?.[classKey] ?? []);
+    const equip = partyEquipment?.[classKey];
+    const hydrated = hydratePartyMember(base, floor, equip);
+    return {
+      ...hydrated,
+      cooldowns: initCooldowns(classKey, hydrated.unlockedSkillIds),
+    };
+  });
 }
 
 /** Validate comp: exactly 4 unique base class keys. */
@@ -106,15 +114,41 @@ export function applyPostBossHeal(members, { staffOfLife = false } = {}) {
 }
 
 /** Rebuild stats at a new floor; optional full heal between fights. */
-export function refreshPartyForFloor(members, floor, partySkillUnlocks, { fullHeal = true } = {}) {
+export function refreshPartyForFloor(
+  members,
+  floor,
+  partySkillUnlocks,
+  partyEquipment = {},
+  { fullHeal = true } = {}
+) {
   return members.map((m) => {
-    const next = buildPartyMember(m.classKey, floor, partySkillUnlocks?.[m.classKey] ?? m.unlockedSkillIds);
+    const next = buildPartyMember(
+      m.classKey,
+      floor,
+      partySkillUnlocks?.[m.classKey] ?? m.unlockedSkillIds
+    );
     if (!next) return m;
+    const hydrated = hydratePartyMember(
+      {
+        ...next,
+        cooldowns: m.cooldowns ?? {},
+        statuses: fullHeal ? {} : m.statuses ?? {},
+        defendActive: false,
+        partyBlock: false,
+        reflect: null,
+      },
+      floor,
+      partyEquipment?.[m.classKey]
+    );
     if (fullHeal) {
-      return { ...next, hp: next.maxHp, ko: false };
+      return { ...hydrated, hp: hydrated.maxHp, ko: false };
     }
     const ratio = m.maxHp > 0 ? m.hp / m.maxHp : 1;
-    return { ...next, hp: Math.max(1, Math.min(next.maxHp, Math.ceil(next.maxHp * ratio))), ko: false };
+    return {
+      ...hydrated,
+      hp: Math.max(1, Math.min(hydrated.maxHp, Math.ceil(hydrated.maxHp * ratio))),
+      ko: false,
+    };
   });
 }
 
