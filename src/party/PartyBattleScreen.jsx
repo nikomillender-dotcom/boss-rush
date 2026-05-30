@@ -2,6 +2,7 @@ import { useState } from "react";
 import { PARTY_CLASS_NAMES } from "../content/classDefinitions.js";
 import { t } from "../i18n/index.js";
 import PartyCommandDock from "./PartyCommandDock.jsx";
+import { SettingsGearButton } from "../components/SettingsPanel.jsx";
 
 /**
  * Party battle: enemy top, log middle, party bottom, active-cat command dock.
@@ -27,6 +28,7 @@ export default function PartyBattleScreen({
   onCancelTarget,
   onRetreat,
   onBackToTitle,
+  onOpenSettings,
 }) {
   const [highlightedSkill, setHighlightedSkill] = useState(null);
 
@@ -66,13 +68,19 @@ export default function PartyBattleScreen({
           width: "100%",
           display: "flex",
           justifyContent: "space-between",
+          alignItems: "center",
           fontSize: 7,
           color: colors.muted,
           marginBottom: 8,
         }}
       >
         <span>Floor {floor}</span>
-        <span>Run 💰 {runCoins}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span>Run 💰 {runCoins}</span>
+          {onOpenSettings ? (
+            <SettingsGearButton onClick={onOpenSettings} colors={colors} size={7} />
+          ) : null}
+        </span>
       </header>
 
       {enemy && (

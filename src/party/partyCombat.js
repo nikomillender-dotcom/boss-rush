@@ -98,8 +98,16 @@ function calcSkillDamage(attacker, skill, enemy, partyBuffs, equipment, { hitMul
   return Math.max(1, Math.round(atk * mult));
 }
 
+/** Doggod takes 25% less damage from party hits (canonical). */
+export function applyPartyEnemyDamage(enemy, rawDamage) {
+  if (!enemy?.isDoggod || rawDamage <= 0) return rawDamage;
+  const reduction = enemy.damageReduction ?? 0.25;
+  return Math.max(1, Math.round(rawDamage * (1 - reduction)));
+}
+
 function applyToEnemy(enemy, damage, statusesPatch) {
-  const hp = Math.max(0, enemy.hp - damage);
+  const finalDamage = applyPartyEnemyDamage(enemy, damage);
+  const hp = Math.max(0, enemy.hp - finalDamage);
   let statuses = enemy.statuses ?? {};
   for (const patch of statusesPatch) {
     if (!patch) continue;
@@ -494,4 +502,14 @@ export function tickEnemyDot(enemy) {
   if (dmg <= 0) return { enemy, log: null };
   const hp = Math.max(0, enemy.hp - dmg);
   return { enemy: { ...enemy, hp, statuses: tickDurations(enemy.statuses) }, log: `DOT ${dmg} on ${enemy.name}` };
+}
+
+/** Doggod regen at the start of its turn (2% max HP). */
+export function tickDoggodRegen(enemy) {
+  if (!enemy?.isDoggod || enemy.hp <= 0 || enemy.hp >= enemy.maxHp) {
+    return { enemy, log: null };
+  }
+  const regen = Math.max(1, Math.floor(enemy.maxHp * (enemy.regenPercent ?? 0.02)));
+  const hp = Math.min(enemy.maxHp, enemy.hp + regen);
+  return { enemy: { ...enemy, hp }, log: `${enemy.name} regenerates ${regen} HP` };
 }

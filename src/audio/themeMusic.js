@@ -3,7 +3,12 @@
  */
 
 import { resolveTheme } from "../content/enemyThemes.js";
-import { isBossRound } from "../battle/scaling.js";
+import { isBossRound, PARTY_MODE_FLOOR_CONFIG } from "../battle/scaling.js";
+import { themeIdForPartyFloor } from "../party/partyEnemyAI.js";
+import {
+  getEffectiveMusicVolume,
+  subscribeAudioSettings,
+} from "./audioSettings.js";
 
 const THEME_IDS = [
   "human",
@@ -20,7 +25,8 @@ const THEME_IDS = [
 
 const BATTLE_VOL = 0.4;
 const CAMP_VOL = 0.28;
-const MUTE_KEY = "bossRush_muted";
+
+export { BATTLE_VOL, CAMP_VOL };
 
 const START_TRACK = "/audio/start.ogg";
 const CAMP_TRACK = "/audio/camp.ogg";
@@ -77,33 +83,20 @@ function debugLog(runId, hypothesisId, location, message, data = {}) {
   // #endregion
 }
 
-function isMuted() {
-  try {
-    return localStorage.getItem(MUTE_KEY) === "1";
-  } catch {
-    return false;
-  }
+function applyVolumeToElement(audio, baseVol) {
+  if (!audio) return;
+  audio._baseVol = baseVol;
+  audio.muted = false;
+  audio.volume = getEffectiveMusicVolume(baseVol);
 }
 
-export function setMusicMuted(muted) {
-  try {
-    localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
-  } catch {
-    /* ignore */
-  }
-  applyMute();
+export function refreshMusicVolumes() {
+  applyVolumeToElement(campAudio, campAudio?._baseVol ?? CAMP_VOL);
+  applyVolumeToElement(titleAudio, titleAudio?._baseVol ?? CAMP_VOL);
+  applyVolumeToElement(battleAudio, battleAudio?._baseVol ?? BATTLE_VOL);
 }
 
-export function getMusicMuted() {
-  return isMuted();
-}
-
-function applyMute() {
-  const m = isMuted();
-  if (campAudio) campAudio.muted = m;
-  if (titleAudio) titleAudio.muted = m;
-  if (battleAudio) battleAudio.muted = m;
-}
+subscribeAudioSettings(refreshMusicVolumes);
 
 function attachSeamlessLoop(audio, src) {
   const tailTrim = LOOP_TAIL_TRIM_BY_SRC[src] ?? DEFAULT_LOOP_TAIL_TRIM;
@@ -132,12 +125,13 @@ function attachSeamlessLoop(audio, src) {
   });
 }
 
-function makeAudio(src, volume) {
+function makeAudio(src, baseVol) {
   const a = new Audio(src);
-  a.volume = volume;
+  a._baseVol = baseVol;
+  a.volume = getEffectiveMusicVolume(baseVol);
   a.playbackRate = 1;
   a.preload = "auto";
-  a.muted = isMuted();
+  a.muted = false;
   attachSeamlessLoop(a, src);
   return a;
 }
@@ -149,7 +143,7 @@ function isPlaying(audio) {
 /** Call on first user gesture (Start / Continue). */
 export function unlockAudio() {
   unlocked = true;
-  applyMute();
+  refreshMusicVolumes();
 }
 
 async function fileExists(src) {
@@ -174,6 +168,7 @@ async function firstExisting(paths) {
 
 function fadeOut(audio, ms = 400) {
   if (!audio) return Promise.resolve();
+  const targetVol = getEffectiveMusicVolume(audio._baseVol ?? BATTLE_VOL);
   return new Promise((resolve) => {
     const start = audio.volume;
     const steps = 8;
@@ -184,7 +179,7 @@ function fadeOut(audio, ms = 400) {
       if (i >= steps) {
         audio.pause();
         audio.currentTime = 0;
-        audio.volume = start;
+        audio.volume = targetVol;
         resolve();
       } else {
         setTimeout(tick, ms / steps);
@@ -287,6 +282,77 @@ export function themeIdForRound(round) {
   return theme?.id ?? THEME_FALLBACK_ID;
 }
 
+async function resolvePartyBattleTrackSrc(floor, { autoEnabled = false } = {}) {
+  if (floor === PARTY_MODE_FLOOR_CONFIG.doggodFloor) {
+    const doggod = await firstExisting(DOGGOD_TRACK_CANDIDATES);
+    if (doggod) return doggod;
+  }
+  if (!autoEnabled && (await fileExists(BOSS_TRACK))) {
+    const tierFloor = ((floor - 1) % 50) + 1;
+    if (tierFloor % 5 === 0) return BOSS_TRACK;
+  }
+  const themeId = themeIdForPartyFloor(floor);
+  if (themeId === "hell" && (await fileExists(HELL_TRACK))) {
+    return HELL_TRACK;
+  }
+  const battle = await firstExisting(BATTLE_TRACK_CANDIDATES);
+  if (battle) return battle;
+
+  let resolved = themeId;
+  if (!THEME_IDS.includes(resolved)) resolved = THEME_FALLBACK_ID;
+  return `/audio/themes/${resolved}.ogg`;
+}
+
+export async function playThemeForPartyFloor(floor, { autoEnabled = false } = {}) {
+  debugLog("pre-fix", "H1", "themeMusic.js:party", "play-party-theme-request", {
+    floor,
+    autoEnabled,
+    unlocked,
+    battleStarting,
+    currentBattleSrc,
+    hasBattleAudio: Boolean(battleAudio),
+    isPlaying: isPlaying(battleAudio),
+  });
+  if (!unlocked || battleStarting) return;
+  const src = await resolvePartyBattleTrackSrc(floor, { autoEnabled });
+
+  if (src === currentBattleSrc && battleAudio && isPlaying(battleAudio)) {
+    return;
+  }
+
+  if (campAudio) {
+    campAudio.pause();
+    campAudio.currentTime = 0;
+    campAudio = null;
+    currentCampSrc = null;
+  }
+  if (titleAudio) {
+    titleAudio.pause();
+    titleAudio.currentTime = 0;
+    titleAudio = null;
+    currentTitleSrc = null;
+  }
+
+  battleStarting = true;
+  try {
+    if (src !== currentBattleSrc || !battleAudio) {
+      await stopBattle();
+      currentBattleSrc = src;
+      battleAudio = makeAudio(src, BATTLE_VOL);
+    }
+    battleAudio.playbackRate = 1;
+    if (!isPlaying(battleAudio)) {
+      try {
+        await battleAudio.play();
+      } catch {
+        /* ignore */
+      }
+    }
+  } finally {
+    battleStarting = false;
+  }
+}
+
 async function resolveBattleTrackSrc(round, { autoEnabled = false } = {}) {
   if (round === DOGGOD_FLOOR) {
     const doggod = await firstExisting(DOGGOD_TRACK_CANDIDATES);
@@ -357,4 +423,7 @@ export async function playThemeForRound(round, { autoEnabled = false } = {}) {
   }
 }
 
-export { THEME_IDS, MUTE_KEY };
+export { THEME_IDS };
+
+/** @deprecated Import from audioSettings.js */
+export { getMusicMuted, setMusicMuted } from "./audioSettings.js";

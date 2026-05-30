@@ -26,9 +26,8 @@ import {
   playCampMusic,
   playTitleMusic,
   playThemeForRound,
+  playThemeForPartyFloor,
   stopAllMusic,
-  getMusicMuted,
-  setMusicMuted,
 } from "./src/audio/themeMusic.js";
 import {
   unlockSfx,
@@ -36,6 +35,7 @@ import {
   playCombatImpact,
   sfxForSkill,
 } from "./src/audio/sfx.js";
+import SettingsPanel, { SettingsGearButton } from "./src/components/SettingsPanel.jsx";
 import {
   SCALING_CONFIG,
   isBossRound,
@@ -126,7 +126,7 @@ import {
   skillIdsUnlockedByFloor,
   getPartySkill,
 } from "./src/content/skillDefinitions.js";
-import { getEnemyTierForFloor } from "./src/battle/scaling.js";
+import { getEnemyTierForFloor, PARTY_MODE_FLOOR_CONFIG } from "./src/battle/scaling.js";
 import { partyActOrderIndices } from "./src/combat/turnSystem.js";
 import {
   applyFloorUnlocks,
@@ -152,6 +152,7 @@ import {
   listReadySkills,
   needsAllyTarget,
   tickEnemyDot,
+  tickDoggodRegen,
   tickPartyBuffs,
   tickPartyCooldowns,
 } from "./src/party/partyCombat.js";
@@ -3470,7 +3471,8 @@ function useGameEngine() {
     appendPartyLog(`Floor ${floor} cleared! +${reward} run coins`);
 
     let members = [...partyMembersRef.current];
-    const bossFloor = getEnemyTierForFloor(floor) === "boss";
+    const tier = getEnemyTierForFloor(floor);
+    const bossFloor = tier === "boss" || tier === "capstone" || foe?.isDoggod;
     if (bossFloor) {
       const staff = partyHasStaffOfLife(saveRef.current.partySkillUnlocks, floor);
       members = applyPostBossHeal(members, { staffOfLife: staff });
@@ -3488,6 +3490,15 @@ function useGameEngine() {
           ...persisted.partyRecords,
           bestFloor: nextFloor,
           bestComp: partyCompRef.current,
+        },
+      });
+    }
+    if (foe?.isDoggod || floor === PARTY_MODE_FLOOR_CONFIG.doggodFloor) {
+      persisted = commitSave({
+        ...persisted,
+        partyRecords: {
+          ...persisted.partyRecords,
+          doggodDefeated: true,
         },
       });
     }
@@ -3550,6 +3561,9 @@ function useGameEngine() {
     const dotResult = tickEnemyDot(foe);
     if (dotResult.log) appendPartyLog(dotResult.log);
     foe = dotResult.enemy;
+    const regenResult = tickDoggodRegen(foe);
+    if (regenResult.log) appendPartyLog(regenResult.log);
+    foe = regenResult.enemy;
     if (foe.hp <= 0) {
       setPartyEnemy(foe);
       schedule(200, handlePartyVictory);
@@ -4306,8 +4320,7 @@ function BattleControlBar({
   battleSpeedIndex,
   onCycleSpeed,
   speedMultiplier,
-  musicMuted,
-  onToggleMusic,
+  onOpenSettings,
   onShowTutorial,
 }) {
   const speedLabel = `${speedMultiplier}×`;
@@ -4354,24 +4367,7 @@ function BattleControlBar({
       >
         ⏩ {speedLabel}
       </button>
-      <button
-        type="button"
-        onClick={onToggleMusic}
-        aria-label={musicMuted ? t("battle.musicOff") : t("battle.musicOn")}
-        style={{
-          minWidth: 48,
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: 8,
-          padding: "8px 4px",
-          borderRadius: 5,
-          cursor: "pointer",
-          border: `2px solid ${musicMuted ? "#2a2a3a" : "#c8a96e"}`,
-          background: musicMuted ? "#0a0a14" : "#c8a96e22",
-          color: musicMuted ? COLORS.dimmed : COLORS.fight,
-        }}
-      >
-        {musicMuted ? "🔇" : "♪"}
-      </button>
+      <SettingsGearButton onClick={onOpenSettings} colors={COLORS} size={8} />
       {onShowTutorial && (
         <button
           type="button"
@@ -4618,6 +4614,7 @@ function TitleScreen({
   locale,
   onLocaleChange,
   onHowToFight,
+  onOpenSettings,
   onEnterLicense,
   accessMode,
   authEmail,
@@ -4686,6 +4683,7 @@ function TitleScreen({
         >
           ES
         </button>
+        <SettingsGearButton onClick={onOpenSettings} colors={COLORS} size={7} />
       </div>
 
       {allTimeRecords && (
@@ -5027,6 +5025,7 @@ function ShopScreen({
   onBuySkill,
   onStart,
   onBack,
+  onOpenSettings,
 }) {
   const classDef = getLocalizedClass(classKey);
   const isCombo = isComboClassKey(classKey);
@@ -5069,7 +5068,7 @@ function ShopScreen({
           top: 0,
           zIndex: 5,
           display: "grid",
-          gridTemplateColumns: "auto 1fr auto",
+          gridTemplateColumns: "auto 1fr auto auto",
           alignItems: "center",
           gap: 10,
           padding: "8px 10px",
@@ -5090,6 +5089,7 @@ function ShopScreen({
         <div style={{ fontSize: 8, color: COLORS.gold, whiteSpace: "nowrap" }}>
           💰 {wallet.toLocaleString()}
         </div>
+        <SettingsGearButton onClick={onOpenSettings} colors={COLORS} size={7} />
       </div>
 
       {isCombo && innate && (
@@ -5348,7 +5348,7 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
   );
 }
 
-function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords, accessMode }) {
+function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords, accessMode, onOpenSettings }) {
   return (
     <div
       style={{
@@ -5366,8 +5366,12 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords, accessMode 
           maxWidth: 380,
           textAlign: "center",
           paddingBottom: 10,
+          position: "relative",
         }}
       >
+        <div style={{ position: "absolute", top: 0, right: 0 }}>
+          <SettingsGearButton onClick={onOpenSettings} colors={COLORS} size={7} />
+        </div>
         <div style={{ fontSize: 10, color: COLORS.fight, marginBottom: 4 }}>
           {t("select.heading")}
         </div>
@@ -5579,7 +5583,7 @@ function GameOverScreen({
   );
 }
 
-function BattleScene({ game, musicMuted, onToggleMusic }) {
+function BattleScene({ game, onOpenSettings }) {
   const [tutorialOpen, setTutorialOpen] = useState(() => !hasSeenBattleTutorial());
 
   const dismissTutorial = () => {
@@ -5751,8 +5755,7 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
         speedMultiplier={battleSpeedMultiplier}
         battleSpeedIndex={battleSpeedIndex}
         onToggleAuto={toggleAuto}
-        musicMuted={musicMuted}
-        onToggleMusic={onToggleMusic}
+        onOpenSettings={onOpenSettings}
         onShowTutorial={() => setTutorialOpen(true)}
         onCycleSpeed={() => {
           setBattleSpeedIndex(
@@ -5800,12 +5803,22 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
 
 export default function BossRush() {
   const game = useGameEngine();
-  const [musicMuted, setMusicMutedUi] = useState(() => getMusicMuted());
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [titleTutorialOpen, setTitleTutorialOpen] = useState(false);
+
+  const openSettings = () => {
+    playSfx("ui_click");
+    setSettingsOpen(true);
+  };
+  const closeSettings = () => setSettingsOpen(false);
 
   useEffect(() => {
     if (game.scene === "battle") {
-      playThemeForRound(game.round, { autoEnabled: game.autoEnabled });
+      if (game.gameMode === "party") {
+        playThemeForPartyFloor(game.partyFloor, { autoEnabled: game.autoEnabled });
+      } else {
+        playThemeForRound(game.round, { autoEnabled: game.autoEnabled });
+      }
     } else if (game.scene === "title") {
       playTitleMusic();
     } else if (
@@ -5820,7 +5833,7 @@ export default function BossRush() {
     } else if (game.scene === "gameover") {
       stopAllMusic();
     }
-  }, [game.scene, game.round, game.autoEnabled]);
+  }, [game.scene, game.round, game.partyFloor, game.gameMode, game.autoEnabled]);
 
   useEffect(() => {
     const resumeHubMusic = () => {
@@ -5843,15 +5856,11 @@ export default function BossRush() {
     };
   }, [game.scene]);
 
-  const toggleMusic = () => {
-    const next = !getMusicMuted();
-    setMusicMuted(next);
-    setMusicMutedUi(next);
-  };
-
   return (
     <>
       <style>{CSS_KEYFRAMES}</style>
+
+      <SettingsPanel open={settingsOpen} onClose={closeSettings} colors={COLORS} />
 
       {game.scene === "title" && (
         <>
@@ -5873,6 +5882,7 @@ export default function BossRush() {
             locale={game.locale}
             onLocaleChange={game.setLocalePreference}
             onHowToFight={() => setTitleTutorialOpen(true)}
+            onOpenSettings={openSettings}
             onEnterLicense={() => {
               game.setLicenseModalOpen(true);
               game.setLicenseError("");
@@ -5903,6 +5913,7 @@ export default function BossRush() {
           comboKeys={COMBO_CLASS_KEYS}
           comboUnlocked={(key) => isComboUnlockedBySave(game.save, key)}
           getComboLabel={(key) => COMBO_CLASSES[key]?.name ?? key}
+          onOpenSettings={openSettings}
           onBack={() => {
             playSfx("ui_cancel");
             game.exitPartyToTitle();
@@ -5920,6 +5931,7 @@ export default function BossRush() {
           partyWallet={game.save.partyWallet}
           equipment={game.save.partyEquipment}
           skillUnlocks={game.save.partySkillUnlocks}
+          onOpenSettings={openSettings}
           onBuyWeapon={game.buyPartyWeapon}
           onBuyArmor={game.buyPartyArmor}
           onBuyPotency={game.buyPartyPotency}
@@ -5935,6 +5947,7 @@ export default function BossRush() {
           save={game.save}
           allTimeRecords={game.allTimeRecords}
           accessMode={game.accessMode}
+          onOpenSettings={openSettings}
         />
       )}
 
@@ -5950,6 +5963,7 @@ export default function BossRush() {
           onBuyWeapon={game.buyWeapon}
           onBuySkill={game.buySkillUpgrade}
           onStart={() => game.startGame(game.selectedClassKey)}
+          onOpenSettings={openSettings}
           onBack={() => {
             playSfx("ui_cancel");
             game.setScene("select");
@@ -5988,16 +6002,13 @@ export default function BossRush() {
             onCancelTarget={game.partyCancelTarget}
             onRetreat={game.partyRetreat}
             onBackToTitle={game.exitPartyToTitle}
+            onOpenSettings={openSettings}
           />
         );
       })()}
 
       {game.scene === "battle" && game.gameMode !== "party" && (
-        <BattleScene
-          game={game}
-          musicMuted={musicMuted}
-          onToggleMusic={toggleMusic}
-        />
+        <BattleScene game={game} onOpenSettings={openSettings} />
       )}
 
       {game.scene === "gameover" && (

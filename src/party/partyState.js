@@ -6,12 +6,17 @@ import {
   getEnemyTierForFloor,
   getEnemyRoundScaleParty,
   getZoneIndexForPartyFloor,
+  getTierForFreeplay,
+  PARTY_MODE_FLOOR_CONFIG,
   PARTY_TIER_MULT,
 } from "../battle/scaling.js";
 import {
   resolveEnemyTemplate,
+  getCatalogEntry,
   THEME_BLOCKS,
 } from "../content/enemyThemes.js";
+
+export const PARTY_DOGGOD_CATALOG_ID = "angelic_cap_doggod";
 import { buildPartyMember } from "./partyLeveling.js";
 import { PARTY_CLASS_KEYS } from "../content/classDefinitions.js";
 import { passiveIdsUnlockedByFloor } from "../content/skillDefinitions.js";
@@ -23,15 +28,27 @@ export function partyFloorToSoloRound(partyFloor) {
   return Math.max(1, Number(partyFloor) || 1) * 2;
 }
 
+export function isPartyDoggodFloor(partyFloor) {
+  return Math.max(1, Number(partyFloor) || 1) === PARTY_MODE_FLOOR_CONFIG.doggodFloor;
+}
+
 /**
  * Build a scaled enemy for the current party floor.
  * Uses theme trash/miniboss pools via solo round mapping; applies party tier multipliers.
+ * Floor 500 forces the Doggod capstone encounter (canonical party finale).
  */
 export function buildPartyEnemy(partyFloor) {
   const floor = Math.max(1, Number(partyFloor) || 1);
+  const isDoggod = isPartyDoggodFloor(floor);
   const effectiveRound = partyFloorToSoloRound(floor);
-  const template = resolveEnemyTemplate(effectiveRound);
-  const partyTier = getEnemyTierForFloor(floor);
+  const template = isDoggod
+    ? getCatalogEntry(PARTY_DOGGOD_CATALOG_ID)
+    : resolveEnemyTemplate(effectiveRound);
+  let partyTier = getEnemyTierForFloor(floor);
+  if (isDoggod) {
+    partyTier = "capstone";
+  }
+  partyTier = getTierForFreeplay(partyTier, floor);
   const mult = PARTY_TIER_MULT[partyTier] ?? PARTY_TIER_MULT.trash;
   const scale = getEnemyRoundScaleParty(floor);
 
@@ -57,8 +74,11 @@ export function buildPartyEnemy(partyFloor) {
     reward,
     speed: template.speed ?? 5,
     lore: template.lore,
-    actionsPerTurn: mult.actionsPerTurn ?? 1,
+    actionsPerTurn: isDoggod ? 3 : (mult.actionsPerTurn ?? 1),
     isBoss: partyTier === "boss" || partyTier === "capstone",
+    isDoggod,
+    damageReduction: isDoggod ? 0.25 : 0,
+    regenPercent: isDoggod ? 0.02 : 0,
     freezeTurnsLeft: 0,
     poisonTurnsLeft: 0,
   };

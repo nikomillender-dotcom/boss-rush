@@ -4,6 +4,7 @@ import {
   PARTY_CLASS_NAMES,
   getStatLetterCard,
 } from "../content/classDefinitions.js";
+import { SettingsGearButton } from "../components/SettingsPanel.jsx";
 
 const SLOT_COUNT = 4;
 const GRID_SIZE = 16;
@@ -22,6 +23,7 @@ export default function PartySelectScreen({
   getComboLabel = (k) => k,
   onBack,
   onStart,
+  onOpenSettings,
 }) {
   const [slots, setSlots] = useState(() => {
     const seed =
@@ -50,7 +52,21 @@ export default function PartySelectScreen({
 
   return (
     <div style={{ ...screenShell, animation: "fadeUp 0.35s ease" }}>
-      <div style={{ fontSize: 10, color: colors.gold, marginBottom: 8 }}>PARTY MODE</div>
+      <div
+        style={{
+          display: "flex",
+          width: "100%",
+          maxWidth: 320,
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ fontSize: 10, color: colors.gold }}>PARTY MODE</div>
+        {onOpenSettings ? (
+          <SettingsGearButton onClick={onOpenSettings} colors={colors} size={7} />
+        ) : null}
+      </div>
       <div style={{ fontSize: 7, color: colors.muted, lineHeight: 1.8, marginBottom: 8 }}>
         Pick four unique cats. Tap a slot, then tap a class.
       </div>

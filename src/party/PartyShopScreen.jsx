@@ -7,6 +7,7 @@ import {
   listPotencyOffers,
   weaponUpgradePrice,
 } from "./partyShop.js";
+import { SettingsGearButton } from "../components/SettingsPanel.jsx";
 
 /**
  * Party camp between floors: weapons, armor, skill potency (0.4× prices).
@@ -24,6 +25,7 @@ export default function PartyShopScreen({
   onBuyPotency,
   onContinue,
   onRetreat,
+  onOpenSettings,
 }) {
   const [tab, setTab] = useState(comp?.[0] ?? "warrior");
   const classKey = tab;
@@ -34,9 +36,23 @@ export default function PartyShopScreen({
 
   return (
     <div style={{ ...screenShell, animation: "fadeUp 0.3s ease" }}>
-      <div style={{ fontSize: 9, color: colors.gold, marginBottom: 6 }}>Party camp</div>
-      <div style={{ fontSize: 7, color: colors.muted, marginBottom: 10 }}>
-        Floor {floor} · Wallet 💰 {Number(partyWallet || 0).toLocaleString()} (0.4× prices)
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          marginBottom: 10,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 9, color: colors.gold, marginBottom: 6 }}>Party camp</div>
+          <div style={{ fontSize: 7, color: colors.muted }}>
+            Floor {floor} · Wallet 💰 {Number(partyWallet || 0).toLocaleString()} (0.4× prices)
+          </div>
+        </div>
+        {onOpenSettings ? (
+          <SettingsGearButton onClick={onOpenSettings} colors={colors} size={7} />
+        ) : null}
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
