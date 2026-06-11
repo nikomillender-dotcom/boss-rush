@@ -75,7 +75,7 @@ import {
 import { t, setLocale } from "./src/i18n/index.js";
 import {
   DEMO_MAX_FLOOR,
-  LEMON_CHECKOUT_URL,
+  PAYHIP_CHECKOUT_URL,
   STRIPE_ENABLED,
 } from "./src/access/constants.js";
 import {
@@ -1510,6 +1510,7 @@ function useGameEngine() {
   const [enemyFrozen, setEnemyFrozen] = useState(false);
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoPaused, setAutoPaused] = useState(false);
+  const [autoRestart, setAutoRestart] = useState(false);
   const [battleSpeedIndex, setBattleSpeedIndex] = useState(0);
   const [accessMode, setAccessMode] = useState(() => getAccessMode());
   const [licenseModalOpen, setLicenseModalOpen] = useState(false);
@@ -1541,6 +1542,7 @@ function useGameEngine() {
   const saveRef = useRef(save);
   const skipNextEnemyTurnRef = useRef(false);
   const enemyFrozenRef = useRef(false);
+  const meltWindowRef = useRef(false);
   const enemyTurnInFlightRef = useRef(false);
   const afterburnRef = useRef(null);
   const turnRef = useRef(turn);
@@ -1548,6 +1550,8 @@ function useGameEngine() {
   const sceneRef = useRef(scene);
   const autoEnabledRef = useRef(autoEnabled);
   const autoPausedRef = useRef(autoPaused);
+  const autoRestartRef = useRef(autoRestart);
+  const autoTimerRef = useRef(null);
 
   enemyRef.current = enemy;
   playerRef.current = player;
@@ -1563,6 +1567,7 @@ function useGameEngine() {
   sceneRef.current = scene;
   autoEnabledRef.current = autoEnabled;
   autoPausedRef.current = autoPaused;
+  autoRestartRef.current = autoRestart;
 
   useEffect(() => {
     setAccessMode(getAccessMode());
@@ -1617,13 +1622,26 @@ function useGameEngine() {
 
   useEffect(() => () => clearAllTimers(), [clearAllTimers]);
 
+  /**
+   * Single-slot AUTO scheduling: replaces any pending AUTO timer so the
+   * visibility handler and beginPlayerTurn can never stack two commands
+   * into the same player turn.
+   */
+  function scheduleAutoCommand(fn = runAutoCommand) {
+    if (autoTimerRef.current != null) clearTimeout(autoTimerRef.current);
+    autoTimerRef.current = schedule(GAME_CONFIG.autoCommandDelay, () => {
+      autoTimerRef.current = null;
+      fn();
+    });
+  }
+
   /** Resume AUTO after tab wake / timer loss (mobile browsers throttle background tabs). */
   useEffect(() => {
     const onVisibility = () => {
       if (document.visibilityState !== "visible") return;
       if (sceneRef.current !== "battle" || turnRef.current !== "player") return;
       if (!autoEnabledRef.current || autoPausedRef.current) return;
-      schedule(GAME_CONFIG.autoCommandDelay, runAutoCommand);
+      scheduleAutoCommand();
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
@@ -1757,14 +1775,6 @@ function useGameEngine() {
     return wouldAutoLose(p, foe, template, GAME_CONFIG.blockReduction);
   }
 
-  function checkAutoInterrupt() {
-    if (!shouldAutoPause()) return false;
-    setAutoPaused(true);
-    autoPausedRef.current = true;
-    addLogEntry(t("battle.autoSlowing"), "system");
-    return true;
-  }
-
   function runAutoCommand() {
     if (turnRef.current !== "player") return;
     if (!autoEnabledRef.current || autoPausedRef.current) return;
@@ -1776,8 +1786,8 @@ function useGameEngine() {
       return;
     }
 
-    if (checkAutoInterrupt()) return;
-
+    // No low-HP pause: AUTO fights to the death. It still plays defensively
+    // when a hit could kill (tactical, read-only via shouldAutoPause).
     const p = playerRef.current;
     if (!p) return;
     const template = getEnemyTemplateForFoe(enemyRef.current);
@@ -1787,7 +1797,7 @@ function useGameEngine() {
         wouldAutoLose(p, enemyRef.current, template, GAME_CONFIG.blockReduction)) &&
       !p.hasBlockBuff;
     const skillIndex = pickAutoSkill(p.skills, 0, {
-      preferDamage: !checkAutoInterrupt(),
+      preferDamage: !shouldAutoPause(),
     });
     if (skillIndex != null) {
       actionMagic(skillIndex);
@@ -1916,26 +1926,15 @@ function useGameEngine() {
     const skipBoss =
       classKey && canAutoSkipBoss(saveRef.current, classKey, roundNum);
 
-    const manualBossBlock =
-      isBossRound(roundNum) &&
-      !(classKey && canAutoSkipBoss(saveRef.current, classKey, roundNum));
-
-    // Resume after low-HP pause once the fight is safe again (refs avoid stale closure).
-    if (autoEnabledRef.current && autoPausedRef.current && !shouldAutoPause()) {
-      setAutoPaused(false);
-      autoPausedRef.current = false;
-    }
-
-    const willScheduleAuto =
-      autoEnabledRef.current && !autoPausedRef.current && !manualBossBlock;
-
+    // No boss gate: AUTO engages on every floor. Skippable bosses still
+    // auto-skip; unskippable bosses get fought hands-off until death.
     if (skipBoss && autoEnabledRef.current && !autoPausedRef.current) {
-      schedule(GAME_CONFIG.autoCommandDelay, processAutoBossSkip);
+      scheduleAutoCommand(processAutoBossSkip);
       return;
     }
 
-    if (willScheduleAuto) {
-      schedule(GAME_CONFIG.autoCommandDelay, runAutoCommand);
+    if (autoEnabledRef.current && !autoPausedRef.current) {
+      scheduleAutoCommand();
     }
   }
 
@@ -1946,7 +1945,9 @@ function useGameEngine() {
       setAutoPaused(false);
       autoEnabledRef.current = false;
       autoPausedRef.current = false;
-      clearAllTimers();
+      // NOTE: do NOT clearAllTimers() here. It nukes pending beginPlayerTurn /
+      // processVictory / floor transition timers and freezes the game.
+      // runAutoCommand already early-returns when autoEnabledRef.current is false.
       return;
     }
     playSfx("auto_on");
@@ -1955,6 +1956,14 @@ function useGameEngine() {
     autoEnabledRef.current = true;
     autoPausedRef.current = false;
     resumeAutoAfterToggle();
+  }
+
+  /** Grind toggle (lives in CAMP): auto-redeploy the same class on death. */
+  function toggleAutoRestart() {
+    const next = !autoRestartRef.current;
+    autoRestartRef.current = next;
+    setAutoRestart(next);
+    playSfx(next ? "auto_on" : "auto_off");
   }
 
   function resumeAutoAfterToggle() {
@@ -1988,16 +1997,6 @@ function useGameEngine() {
     playSfx("coin_pickup");
 
     const nextRound = roundRef.current + 1;
-    const pKey = playerRef.current?.classKey;
-    if (
-      pKey &&
-      nextRound === BATTLE_SCALING.megaBossRound &&
-      isBossRound(nextRound) &&
-      !canAutoSkipBoss(saveRef.current, pKey, nextRound)
-    ) {
-      setAutoEnabled(false);
-      setAutoPaused(false);
-    }
 
     schedule(Math.max(80, GAME_CONFIG.victoryDelay / 3), () => {
       transitionToNextFloor(nextRound);
@@ -2131,6 +2130,7 @@ function useGameEngine() {
   function clearEnemyFreeze() {
     skipNextEnemyTurnRef.current = false;
     enemyFrozenRef.current = false;
+    meltWindowRef.current = false;
     setEnemyFrozen(false);
     setEnemy((prev) =>
       prev ? { ...prev, freezeTurnsLeft: 0 } : prev
@@ -2139,11 +2139,17 @@ function useGameEngine() {
 
   function meltFreezeOnEnemy() {
     const foe = enemyRef.current;
-    if (!foe || (foe.freezeTurnsLeft ?? 0) <= 0) return false;
-    setEnemy({ ...foe, freezeTurnsLeft: 0 });
-    skipNextEnemyTurnRef.current = false;
-    enemyFrozenRef.current = false;
-    setEnemyFrozen(false);
+    if (!foe) return false;
+    const hasFreeze = (foe.freezeTurnsLeft ?? 0) > 0;
+    const inMeltWindow = meltWindowRef.current === true;
+    if (!hasFreeze && !inMeltWindow) return false;
+    if (hasFreeze) {
+      setEnemy({ ...foe, freezeTurnsLeft: 0 });
+      skipNextEnemyTurnRef.current = false;
+      enemyFrozenRef.current = false;
+      setEnemyFrozen(false);
+    }
+    meltWindowRef.current = false;
     return true;
   }
 
@@ -2169,6 +2175,10 @@ function useGameEngine() {
     setEnemy(nextFoe);
     enemyFrozenRef.current = turnsLeft > 0;
     setEnemyFrozen(turnsLeft > 0);
+    // Open a one-player-turn melt window when freeze naturally expires, so
+    // a 1-turn freeze followed by fire on the next player turn still gets
+    // the fireMeltBonus (1.10x). Closed at top of next processEnemyTurn.
+    if (turnsLeft === 0) meltWindowRef.current = true;
     addLogEntry(
       t("battle.freezeTick", { name: foe.name, turns: turnsLeft }),
       "system"
@@ -2208,6 +2218,11 @@ function useGameEngine() {
       }
 
       enemyTurnInFlightRef.current = true;
+
+      // Close any open melt window from the previous enemy turn. finishFrozenEnemyTurn
+      // re-opens it below if freeze expires this turn, so a 1-turn freeze still grants
+      // the bonus on the upcoming player turn but the window does not persist further.
+      meltWindowRef.current = false;
 
       const finishEnemyTurn = () => {
         enemyTurnInFlightRef.current = false;
@@ -2405,16 +2420,6 @@ function useGameEngine() {
       setScene("paywall");
       return;
     }
-    if (
-      classKey &&
-      nextRound === BATTLE_SCALING.megaBossRound &&
-      isBossRound(nextRound) &&
-      !canAutoSkipBoss(saveRef.current, classKey, nextRound)
-    ) {
-      setAutoEnabled(false);
-      setAutoPaused(false);
-    }
-
     const newStreak = streakRef.current + 1;
     const multiplier = getStreakMultiplier(newStreak);
     const earned = Math.round(foe.reward * multiplier * GAME_CONFIG.rewardMultiplier);
@@ -2464,11 +2469,24 @@ function useGameEngine() {
     afterburnRef.current = null;
     setBattleTurn(0);
     battleTurnRef.current = 0;
-    setAutoEnabled(false);
-    setAutoPaused(false);
     addLogEntry(t("battle.playerFallen"), "bad");
     commitSave({ ...saveRef.current, wallet: walletRef.current });
     updateRecordsFromRun();
+
+    // Grind loop: silently redeploy the same class with AUTO still running,
+    // skipping the game-over screen entirely. Coins/records were just saved
+    // above. startGame re-enables AUTO via its autoRestart branch.
+    const redeployClass = autoRestartRef.current
+      ? playerRef.current?.classKey ?? selectedClassKeyRef.current
+      : null;
+    if (redeployClass) {
+      addLogEntry(t("battle.redeploying"), "system");
+      schedule(GAME_CONFIG.deathDelay, () => startGame(redeployClass));
+      return;
+    }
+
+    setAutoEnabled(false);
+    setAutoPaused(false);
     schedule(GAME_CONFIG.deathDelay, () => setScene("gameover"));
   }
 
@@ -2604,6 +2622,7 @@ function useGameEngine() {
 
   function startGame(classKey) {
     clearAllTimers();
+    autoTimerRef.current = null;
     clearEnemyFreeze();
     afterburnRef.current = null;
     if (isComboClassKey(classKey)) {
@@ -2639,6 +2658,15 @@ function useGameEngine() {
     ]);
     setScene("battle");
     unlockGameAudio();
+
+    // Grind mode: every run starts auto-playing. The first command is scheduled
+    // (not run inline) so it fires after React flushes scene/turn — by which point
+    // runAutoCommand's turnRef === "player" guard passes.
+    if (autoRestartRef.current) {
+      setAutoEnabled(true);
+      autoEnabledRef.current = true;
+      scheduleAutoCommand();
+    }
   }
 
   function continueFromPaywall() {
@@ -2764,25 +2792,16 @@ function useGameEngine() {
       return;
     }
 
-    const lost = runCoinsEarnedRef.current;
-    const msg =
-      lost > 0
-        ? t("battle.retreatConfirm", { lost: lost.toLocaleString() })
-        : t("battle.retreatNoCoins");
-    if (!window.confirm(msg)) return;
+    // Retreat is the way out of an AUTO-RESTART grind: return to CAMP keeping
+    // all coins (they're already banked in the wallet). Only the run streak ends.
+    if (!window.confirm(t("battle.retreatNoCoins"))) return;
 
     playSfx("run_retreat");
     clearAllTimers();
+    autoTimerRef.current = null;
     enemyTurnInFlightRef.current = false;
     clearEnemyFreeze();
     afterburnRef.current = null;
-
-    if (lost > 0) {
-      const nextWallet = Math.max(0, walletRef.current - lost);
-      walletRef.current = nextWallet;
-      setWallet(nextWallet);
-      commitSave({ ...saveRef.current, wallet: nextWallet });
-    }
 
     setRunCoinsEarned(0);
     runCoinsEarnedRef.current = 0;
@@ -3219,6 +3238,7 @@ function useGameEngine() {
     enemyFrozen,
     autoEnabled,
     autoPaused,
+    autoRestart,
     battleSpeedMultiplier,
     battleSpeedIndex,
     allTimeRecords,
@@ -3276,6 +3296,7 @@ function useGameEngine() {
     setBattleSpeedIndex,
     resumeAutoAfterToggle,
     toggleAuto,
+    toggleAutoRestart,
     isBossRound: (r) => isBossRound(r ?? round),
   };
 }
@@ -3419,10 +3440,6 @@ const CSS_KEYFRAMES = `
   }
 `;
 
-const LOW_MOTION_MODE =
-  typeof window !== "undefined" &&
-  window.matchMedia("(max-width: 480px), (prefers-reduced-motion: reduce)").matches;
-
 // ═══════════════════════════════════════════════════════════════════════
 // UI COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════
@@ -3440,7 +3457,7 @@ function FloatingNumber({ text, color }) {
         fontSize: "13px",
         whiteSpace: "nowrap",
         textShadow: "1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000",
-        animation: LOW_MOTION_MODE ? "none" : "floatUp 1.4s ease-out forwards",
+        animation: "floatUp 1.4s ease-out forwards",
         zIndex: 99,
         color,
       }}
@@ -3463,10 +3480,10 @@ function HpBar({ current, max, isPlayer }) {
     fillGradient = isLow
       ? "linear-gradient(90deg, #7B4000, #cc8800)"
       : "linear-gradient(90deg, #006600, #00cc44)";
-    glowAnimation = !LOW_MOTION_MODE && isLow ? "hpWarningGlow 0.8s infinite" : "none";
+    glowAnimation = isLow ? "hpWarningGlow 0.8s infinite" : "none";
   } else {
     fillGradient = "linear-gradient(90deg, #7B0000, #dd2222)";
-    glowAnimation = !LOW_MOTION_MODE && isLow ? "hpCriticalGlow 1s infinite" : "none";
+    glowAnimation = isLow ? "hpCriticalGlow 1s infinite" : "none";
   }
 
   return (
@@ -3572,7 +3589,7 @@ const CombatantDisplay = memo(function CombatantDisplay({
         flexDirection: "column",
         alignItems: "center",
         gap: 6,
-        animation: !LOW_MOTION_MODE && shaking ? "shake 0.42s ease" : "none",
+        animation: shaking ? "shake 0.42s ease" : "none",
       }}
     >
       {/* Name row (enemy: above icon; player: below icon) */}
@@ -3902,7 +3919,7 @@ const BattleLog = memo(function BattleLog({ entries }) {
             lineHeight: 1.8,
             fontFamily: "'Press Start 2P', monospace",
             color: LOG_COLORS[entry.type] || LOG_COLORS.info,
-            animation: LOW_MOTION_MODE ? "none" : "logSlideIn 0.3s ease",
+            animation: "logSlideIn 0.3s ease",
           }}
         >
           {entry.message}
@@ -3940,7 +3957,7 @@ const BattleHUD = memo(function BattleHUD({
           color: COLORS.gold,
           fontSize: 11,
           fontFamily: "'Press Start 2P', monospace",
-          animation: !LOW_MOTION_MODE && coinPop ? "coinBounce 0.5s ease" : "none",
+          animation: coinPop ? "coinBounce 0.5s ease" : "none",
         }}
       >
         💰 {wallet.toLocaleString()}
@@ -3952,7 +3969,7 @@ const BattleHUD = memo(function BattleHUD({
           fontSize: streak >= 5 ? 12 : 9,
           fontFamily: "'Press Start 2P', monospace",
           transition: "font-size 0.3s",
-          animation: !LOW_MOTION_MODE && streakPop ? "pop 0.5s ease" : "none",
+          animation: streakPop ? "pop 0.5s ease" : "none",
         }}
       >
         {streak > 0 ? `🔥 ×${streak}` : t("battle.noStreak")}
@@ -4164,7 +4181,7 @@ function TitleScreen({
               {accessMode === "demo" && (
                 <>
                   <a
-                    href={LEMON_CHECKOUT_URL}
+                    href={PAYHIP_CHECKOUT_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={() => trackEvent(ANALYTICS.PURCHASE_CLICK, { source: "title" })}
@@ -4388,6 +4405,8 @@ function ShopScreen({
   onBuySkill,
   onStart,
   onBack,
+  autoRestart,
+  onToggleAutoRestart,
 }) {
   const classDef = getLocalizedClass(classKey);
   const isCombo = isComboClassKey(classKey);
@@ -4597,15 +4616,15 @@ function ShopScreen({
         </ShopSection>
       )}
 
-      {/* Sticky footer: START + Back */}
+      {/* Sticky footer: AUTO-RESTART toggle + START + Back */}
       <div
         style={{
           position: "sticky",
           bottom: 0,
           zIndex: 5,
           marginTop: "auto",
-          display: "grid",
-          gridTemplateColumns: "1fr auto",
+          display: "flex",
+          flexDirection: "column",
           gap: 6,
           padding: "8px 6px 4px",
           background: "linear-gradient(180deg, transparent, rgba(10,10,18,0.96) 30%)",
@@ -4613,37 +4632,66 @@ function ShopScreen({
       >
         <button
           type="button"
-          onClick={onStart}
+          onClick={onToggleAutoRestart}
           style={{
             fontFamily: "'Press Start 2P', monospace",
-            fontSize: 10,
-            padding: "12px 18px",
+            fontSize: 8,
+            padding: "10px 12px",
             borderRadius: 5,
             cursor: "pointer",
-            border: `2px solid ${COLORS.fightBorder}`,
-            background: `${COLORS.fight}22`,
-            color: COLORS.fight,
-            letterSpacing: 1,
+            border: `2px solid ${autoRestart ? "#44cc66" : "#2a2a3a"}`,
+            background: autoRestart ? "#44cc6622" : "#0a0a14",
+            color: autoRestart ? "#44cc66" : COLORS.dimmed,
+            textAlign: "left",
+            lineHeight: 1.7,
           }}
         >
-          {t("shop.start")}
+          {t("shop.autoRestart")} {autoRestart ? t("shop.autoRestartOn") : t("shop.autoRestartOff")}
+          <span style={{ display: "block", fontSize: 6, color: COLORS.muted, marginTop: 4 }}>
+            {t("shop.autoRestartHint")}
+          </span>
         </button>
-        <button
-          type="button"
-          onClick={onBack}
+        <div
           style={{
-            fontFamily: "'Press Start 2P', monospace",
-            fontSize: 7,
-            padding: "12px 14px",
-            borderRadius: 5,
-            cursor: "pointer",
-            border: "1px solid #2a2a3a",
-            background: "transparent",
-            color: COLORS.muted,
+            display: "grid",
+            gridTemplateColumns: "1fr auto",
+            gap: 6,
           }}
         >
-          {t("shop.back")}
-        </button>
+          <button
+            type="button"
+            onClick={onStart}
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 10,
+              padding: "12px 18px",
+              borderRadius: 5,
+              cursor: "pointer",
+              border: `2px solid ${COLORS.fightBorder}`,
+              background: `${COLORS.fight}22`,
+              color: COLORS.fight,
+              letterSpacing: 1,
+            }}
+          >
+            {t("shop.start")}
+          </button>
+          <button
+            type="button"
+            onClick={onBack}
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 7,
+              padding: "12px 14px",
+              borderRadius: 5,
+              cursor: "pointer",
+              border: "1px solid #2a2a3a",
+              background: "transparent",
+              color: COLORS.muted,
+            }}
+          >
+            {t("shop.back")}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -4709,7 +4757,7 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
   );
 }
 
-function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords, accessMode }) {
+function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRecords, accessMode }) {
   return (
     <div
       style={{
@@ -4729,6 +4777,24 @@ function ClassSelectScreen({ onSelect, wallet, save, allTimeRecords, accessMode 
           paddingBottom: 10,
         }}
       >
+        <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 8 }}>
+          <button
+            type="button"
+            onClick={onReturnToStart}
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 7,
+              padding: "8px 12px",
+              borderRadius: 5,
+              cursor: "pointer",
+              border: "1px solid #2a2a3a",
+              background: "transparent",
+              color: COLORS.muted,
+            }}
+          >
+            {t("select.returnStart")}
+          </button>
+        </div>
         <div style={{ fontSize: 10, color: COLORS.fight, marginBottom: 4 }}>
           {t("select.heading")}
         </div>
@@ -4978,8 +5044,8 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
   // Determine background flash
   let bgStyle = COLORS.bg;
   let bgAnimation = "none";
-  if (!LOW_MOTION_MODE && flashType === "gold") bgAnimation = "bgFlashGold 0.35s ease";
-  if (!LOW_MOTION_MODE && flashType === "red") bgAnimation = "bgFlashRed 0.35s ease";
+  if (flashType === "gold") bgAnimation = "bgFlashGold 0.35s ease";
+  if (flashType === "red") bgAnimation = "bgFlashRed 0.35s ease";
 
   // Split floating numbers by target
   const enemyFloats = floatingNumbers.filter((f) => f.target === "enemy");
@@ -5238,6 +5304,10 @@ export default function BossRush() {
       {game.scene === "select" && (
         <ClassSelectScreen
           onSelect={game.selectClass}
+          onReturnToStart={() => {
+            playSfx("ui_cancel");
+            game.setScene("title");
+          }}
           wallet={game.wallet}
           save={game.save}
           allTimeRecords={game.allTimeRecords}
@@ -5261,6 +5331,8 @@ export default function BossRush() {
             playSfx("ui_cancel");
             game.setScene("select");
           }}
+          autoRestart={game.autoRestart}
+          onToggleAutoRestart={game.toggleAutoRestart}
         />
       )}
 

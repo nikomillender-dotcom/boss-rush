@@ -1,7 +1,7 @@
 import { storeLicenseToken } from "./accessMode.js";
 
 /**
- * Validate a Lemon Squeezy license key via Vercel API.
+ * Validate a Payhip license key via Vercel API.
  * @param {string} licenseKey
  * @returns {Promise<{ ok: boolean, token?: string, error?: string }>}
  */

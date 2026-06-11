@@ -14,9 +14,9 @@ export const ALLOWED_HOSTS = [
   "",
 ];
 
-export const LEMON_CHECKOUT_URL =
-  import.meta.env.VITE_LEMON_CHECKOUT_URL ||
-  "https://bossrush.lemonsqueezy.com/checkout/buy";
+export const PAYHIP_CHECKOUT_URL =
+  import.meta.env.VITE_PAYHIP_CHECKOUT_URL ||
+  "https://payhip.com/NJMVentures";
 
 export const STRIPE_ENABLED = Boolean(import.meta.env.VITE_STRIPE_ENABLED);
 

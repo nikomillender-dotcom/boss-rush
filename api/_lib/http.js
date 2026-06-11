@@ -4,21 +4,28 @@ export function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-export async function readJsonBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
+export class PayloadTooLargeError extends Error {
+  constructor() {
+    super("payload_too_large");
+    this.code = "PAYLOAD_TOO_LARGE";
   }
-  const raw = Buffer.concat(chunks).toString("utf8");
+}
+
+export async function readJsonBody(req, maxBytes = Infinity) {
+  if (req.body && typeof req.body === "object") return req.body;
+  const raw = (await readRawBody(req, maxBytes)).toString("utf8");
   if (!raw) return {};
   return JSON.parse(raw);
 }
 
-export async function readRawBody(req) {
+export async function readRawBody(req, maxBytes = Infinity) {
   const chunks = [];
+  let total = 0;
   for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    total += buf.length;
+    if (total > maxBytes) throw new PayloadTooLargeError();
+    chunks.push(buf);
   }
   return Buffer.concat(chunks);
 }

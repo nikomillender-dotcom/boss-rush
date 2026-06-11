@@ -83,7 +83,7 @@ Run all of these on production once Upstash is connected:
 
 ## 4. Things deliberately not done
 
-- **No custom forgot-password UI.** Users who buy via Lemon Squeezy get a key in email and don't need a password at all. Supabase Magic Link covers Stripe-path users without code.
+- **No custom forgot-password UI.** Users who buy via Payhip get a key in email and don't need a password at all. Supabase Magic Link covers Stripe-path users without code.
 - **No strict Content-Security-Policy.** Vite + PWA + inline service worker registration make a strict CSP fiddly. Worth doing later, but the meaningful XSS surface (no `dangerouslySetInnerHTML`, no `eval`, no user-supplied HTML) is already small.
 - **No CAPTCHA on signup.** Supabase has hCaptcha built-in if abuse appears post-launch.
 - **No server-side game-state validation beyond shape/size.** Only matters if leaderboards ship.

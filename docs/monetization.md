@@ -11,22 +11,22 @@ Boss Rush uses a **client-side demo gate** (floor 100 capstone) plus **server-va
 
 Unlock **full** when either:
 
-1. Valid **Lemon Squeezy** license JWT in `bossRush_license_token`, or  
+1. Valid **Payhip** license JWT in `bossRush_license_token`, or  
 2. Supabase `profiles.purchased = true` (Stripe Checkout webhook).
 
-## Phase 1 — Lemon license
+## Phase 1 — Payhip license
 
-- **API:** `POST /api/validate-key` → Lemon `licenses/validate` → HS256 JWT (`JWT_SECRET`).
-- **Revalidate:** `POST /api/check-license` on boot (throttled once per session).
+- **API:** `POST /api/validate-key` → Payhip `license/verify` (`data.enabled`) → HS256 JWT (`JWT_SECRET`).
+- **Revalidate:** `POST /api/check-license` on boot (throttled once per session) — verifies the JWT, provider-agnostic.
 - **UI:** Paywall after floor 100 win; title “Buy full game” + “Have a key?” modal.
 
 ### Vercel env (never commit)
 
 ```
-LEMON_SQUEEZY_API_KEY=
-LEMON_STORE_ID=          # optional
+PAYHIP_API_KEY=          # Payhip account API key (Settings > API)
+PAYHIP_PRODUCT_LINK=     # product permalink slug (payhip.com/b/SLUG) — scopes key checks
 JWT_SECRET=              # 32+ random bytes
-VITE_LEMON_CHECKOUT_URL= # Lemon checkout link
+VITE_PAYHIP_CHECKOUT_URL= # Payhip store/product link (fallback: https://payhip.com/NJMVentures)
 ```
 
 ## Phase 2 — Supabase + Stripe
@@ -60,7 +60,7 @@ VITE_STRIPE_ENABLED=true   # show Stripe buy on title when logged in
 
 ## Support flow
 
-1. itch / Lemon buyer → email with license key → paste on title screen.  
+1. itch / Payhip buyer → email with license key → paste on title screen.  
 2. Stripe buyer → sign up → buy → return URL `?checkout=success` → `check-access`.  
 3. Cloud save conflict → login prompt “Load cloud save?” when `cloudUpdatedAt` is newer.
 

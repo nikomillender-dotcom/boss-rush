@@ -31,12 +31,19 @@ async function getUser(req) {
   return { supabase, userId: data.user.id };
 }
 
+function isPlainObject(v) {
+  return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
+
 /**
- * Strip unknown keys, clamp numerics. Server is the source of truth for
- * cloudUpdatedAt to prevent clients from forging future timestamps.
+ * Strip unknown keys, validate field shapes, clamp numerics. The save blob is
+ * a client-authored backup of single-player progress (the checksum is a
+ * tamper deterrent, not security) — this guards against malformed blobs that
+ * would crash the game when loaded back, not against cheating. The server
+ * stamps cloudUpdatedAt so clients cannot forge future timestamps.
  */
 function sanitizeSave(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  if (!isPlainObject(input)) return null;
   const clean = {};
   for (const [k, v] of Object.entries(input)) {
     if (!ALLOWED_SAVE_KEYS.has(k)) continue;
@@ -49,6 +56,28 @@ function sanitizeSave(input) {
   }
   if (typeof clean.locale !== "undefined") {
     if (clean.locale !== "en" && clean.locale !== "es") delete clean.locale;
+  }
+  for (const key of ["classes", "records", "unlocks"]) {
+    if (typeof clean[key] !== "undefined" && !isPlainObject(clean[key])) {
+      delete clean[key];
+    }
+  }
+  if (clean.records) {
+    const records = { ...clean.records };
+    for (const key of ["coins", "rounds", "streak"]) {
+      if (typeof records[key] === "undefined") continue;
+      const n = Number(records[key]);
+      records[key] = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    }
+    clean.records = records;
+  }
+  if (typeof clean._saveChecksum !== "undefined") {
+    if (
+      typeof clean._saveChecksum !== "string" ||
+      !/^[0-9a-f]{1,16}$/.test(clean._saveChecksum)
+    ) {
+      delete clean._saveChecksum;
+    }
   }
   clean.cloudUpdatedAt = Date.now();
   return clean;
@@ -89,8 +118,11 @@ export default async function handler(req, res) {
 
   let body;
   try {
-    body = await readJsonBody(req);
-  } catch {
+    body = await readJsonBody(req, MAX_SAVE_BYTES + 1024);
+  } catch (err) {
+    if (err?.code === "PAYLOAD_TOO_LARGE") {
+      return json(res, 413, { error: "save_too_large" });
+    }
     return json(res, 400, { error: "invalid_json" });
   }
 

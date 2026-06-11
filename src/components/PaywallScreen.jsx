@@ -1,5 +1,5 @@
 import { t } from "../i18n/index.js";
-import { LEMON_CHECKOUT_URL } from "../access/constants.js";
+import { PAYHIP_CHECKOUT_URL } from "../access/constants.js";
 import { trackEvent, ANALYTICS } from "../access/analytics.js";
 
 const COLORS = {
@@ -27,7 +27,7 @@ export default function PaywallScreen({
   onReturnCamp,
   accessMode,
 }) {
-  const buyUrl = LEMON_CHECKOUT_URL;
+  const buyUrl = PAYHIP_CHECKOUT_URL;
 
   return (
     <div

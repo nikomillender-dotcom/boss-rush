@@ -22,7 +22,15 @@ export default async function handler(req, res) {
 
   const stripe = new Stripe(stripeKey);
   const sig = req.headers["stripe-signature"];
-  const rawBody = await readRawBody(req);
+  let rawBody;
+  try {
+    rawBody = await readRawBody(req, 1024 * 1024);
+  } catch (err) {
+    if (err?.code === "PAYLOAD_TOO_LARGE") {
+      return json(res, 413, { error: "payload_too_large" });
+    }
+    throw err;
+  }
 
   let event;
   try {

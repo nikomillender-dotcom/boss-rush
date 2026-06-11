@@ -7,7 +7,7 @@ Turn-based cat-vs-dog gauntlet — survive endless scaled foes, build coin strea
 ## Demo vs full game
 
 - Web demo is free through **floor 100**.
-- Full access (floors 101+, locked classes, cloud saves) unlocks with a Lemon license key or authenticated purchase.
+- Full access (floors 101+, locked classes, cloud saves) unlocks with a Payhip license key or authenticated purchase.
 - Terms and privacy pages are served at `/terms.html` and `/privacy.html`.
 
 Monetization architecture and env setup: [docs/monetization.md](docs/monetization.md)

@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   const rl = await checkRateLimit("validateKey", req);
   if (!rl.ok) return json(res, 429, { error: "rate_limited" });
 
-  const apiKey = process.env.LEMON_SQUEEZY_API_KEY;
+  const apiKey = process.env.PAYHIP_API_KEY;
   const secret = process.env.JWT_SECRET;
   if (!apiKey || !secret) {
     return json(res, 503, { error: "not_configured" });
@@ -27,23 +27,22 @@ export default async function handler(req, res) {
     return json(res, 400, { error: "missing_key" });
   }
 
-  const storeId = process.env.LEMON_STORE_ID;
-  const lsRes = await fetch("https://api.lemonsqueezy.com/v1/licenses/validate", {
-    method: "POST",
-    headers: {
-      Accept: "application/vnd.api+json",
-      "Content-Type": "application/vnd.api+json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      license_key: licenseKey,
-      ...(storeId ? { store_id: Number(storeId) } : {}),
-    }),
-  });
+  // Verify against Payhip's License API. product_link scopes the check to the
+  // specific product (the payhip.com/b/SLUG permalink); recommended but optional.
+  const productLink = process.env.PAYHIP_PRODUCT_LINK;
+  const params = new URLSearchParams({ license_key: licenseKey });
+  if (productLink) params.set("product_link", productLink);
+  const phRes = await fetch(
+    `https://payhip.com/api/v1/license/verify?${params.toString()}`,
+    {
+      method: "GET",
+      headers: { "payhip-api-key": apiKey },
+    }
+  );
 
-  const lsData = await lsRes.json().catch(() => ({}));
-  const valid = lsData?.valid ?? lsData?.meta?.valid ?? false;
-  if (!lsRes.ok || !valid) {
+  const phData = await phRes.json().catch(() => ({}));
+  const valid = phData?.data?.enabled === true;
+  if (!phRes.ok || !valid) {
     return json(res, 401, { error: "invalid_key" });
   }
 

@@ -21,7 +21,7 @@ Ops-only — no game code required. Use this when publishing the supporter editi
 
 - **Free demo funnel:** https://boss-rush-six.vercel.app (demo ends at floor 100 until license / account unlock).
 - **TikTok / social bio:** itch page URL + Vercel demo URL.
-- **Full unlock:** Lemon Squeezy checkout (same key works on web after Phase 1).
+- **Full unlock:** Payhip checkout (same key works on web after Phase 1).
 
 ## Honesty window (24–48h before paywall ships)
 
@@ -29,4 +29,4 @@ If itch build is still full-game parity with web, label listing **“Early acces
 
 ## License keys
 
-After Lemon product is live, enable license keys in Lemon dashboard; buyers paste key on title screen (“Have a key?”).
+After the Payhip product is live, enable license keys in the Payhip dashboard; buyers paste key on title screen (“Have a key?”).
