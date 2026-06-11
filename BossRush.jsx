@@ -20,7 +20,16 @@
  *   - Add saving: serialize gameState to localStorage on win/round change
  */
 
-import { memo, useState, useEffect, useRef, useCallback } from "react";
+import {
+  memo,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  useContext,
+  createContext,
+} from "react";
 import {
   unlockAudio,
   playCampMusic,
@@ -1483,6 +1492,53 @@ function unlockGameAudio() {
   unlockSfx();
 }
 
+// ── Reduced-motion (mobile perf) ──────────────────────────────────────────
+// lowMotion strips the expensive battle animations (HP glow pulses, screen
+// shake, full-screen flashes, coin/streak pops, log slide-in) that saturate
+// Safari's main thread during fast AUTO. Floating damage numbers + HP-bar
+// fill are kept. Provided via context so toggling never re-renders the tree.
+const LowMotionContext = createContext(false);
+
+/** Max floating damage numbers kept on screen at once (anti-pile-up). */
+const MAX_FLOATS = 6;
+
+const EFFECTS_MODE_KEY = "bossRush_effectsMode";
+const EFFECTS_MODES = ["auto", "full", "reduced"];
+
+function loadEffectsMode() {
+  try {
+    const v = localStorage.getItem(EFFECTS_MODE_KEY);
+    return EFFECTS_MODES.includes(v) ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function saveEffectsMode(mode) {
+  try {
+    localStorage.setItem(EFFECTS_MODE_KEY, mode);
+  } catch {
+    /* private mode / storage disabled */
+  }
+}
+
+/** Reactive matchMedia for small screens or an explicit reduced-motion pref. */
+function useAutoReducedMotion() {
+  const query = "(max-width: 480px), (prefers-reduced-motion: reduce)";
+  const [matches, setMatches] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  return matches;
+}
+
 function useGameEngine() {
   const [save, setSave] = useState(() => {
     const loaded = loadSave();
@@ -1511,7 +1567,12 @@ function useGameEngine() {
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoPaused, setAutoPaused] = useState(false);
   const [autoRestart, setAutoRestart] = useState(false);
+  const [effectsMode, setEffectsMode] = useState(loadEffectsMode);
   const [battleSpeedIndex, setBattleSpeedIndex] = useState(0);
+
+  const autoReduced = useAutoReducedMotion();
+  const lowMotion =
+    effectsMode === "reduced" || (effectsMode === "auto" && autoReduced);
   const [accessMode, setAccessMode] = useState(() => getAccessMode());
   const [licenseModalOpen, setLicenseModalOpen] = useState(false);
   const [licenseBusy, setLicenseBusy] = useState(false);
@@ -1551,6 +1612,7 @@ function useGameEngine() {
   const autoEnabledRef = useRef(autoEnabled);
   const autoPausedRef = useRef(autoPaused);
   const autoRestartRef = useRef(autoRestart);
+  const lowMotionRef = useRef(lowMotion);
   const autoTimerRef = useRef(null);
 
   enemyRef.current = enemy;
@@ -1568,6 +1630,7 @@ function useGameEngine() {
   autoEnabledRef.current = autoEnabled;
   autoPausedRef.current = autoPaused;
   autoRestartRef.current = autoRestart;
+  lowMotionRef.current = lowMotion;
 
   useEffect(() => {
     setAccessMode(getAccessMode());
@@ -1966,6 +2029,17 @@ function useGameEngine() {
     playSfx(next ? "auto_on" : "auto_off");
   }
 
+  /** Cycle effects: auto → full → reduced → auto (persisted per device). */
+  function cycleEffectsMode() {
+    setEffectsMode((prev) => {
+      const next =
+        EFFECTS_MODES[(EFFECTS_MODES.indexOf(prev) + 1) % EFFECTS_MODES.length];
+      saveEffectsMode(next);
+      return next;
+    });
+    playSfx("ui_click");
+  }
+
   function resumeAutoAfterToggle() {
     schedule(0, () => {
       if (sceneRef.current !== "battle" || turnRef.current !== "player") return;
@@ -2043,28 +2117,38 @@ function useGameEngine() {
 
   function spawnFloat(text, target, color) {
     const id = floatIdCounterRef.current++;
-    setFloatingNumbers((prev) => [...prev, { id, text, target, color }]);
+    // Cap concurrent floats so fast AUTO can't pile up dozens of animating
+    // nodes (pure perf — rarely visible at normal speed).
+    setFloatingNumbers((prev) =>
+      [...prev, { id, text, target, color }].slice(-MAX_FLOATS)
+    );
     setTimeout(() => {
       setFloatingNumbers((prev) => prev.filter((f) => f.id !== id));
     }, GAME_CONFIG.floatDuration);
   }
 
+  // Low-motion: these set transient visual state that drives shake/flash/pop
+  // animations. Early-returning kills both the animation and its render churn.
   function triggerShake(target) {
+    if (lowMotionRef.current) return;
     setShakeTarget(target);
     setTimeout(() => setShakeTarget(""), 450);
   }
 
   function triggerFlash(type) {
+    if (lowMotionRef.current) return;
     setFlashType(type);
     setTimeout(() => setFlashType(""), 350);
   }
 
   function triggerStreakPop() {
+    if (lowMotionRef.current) return;
     setStreakPop(true);
     setTimeout(() => setStreakPop(false), 700);
   }
 
   function triggerCoinPop() {
+    if (lowMotionRef.current) return;
     setCoinPop(true);
     setTimeout(() => setCoinPop(false), 600);
   }
@@ -3239,6 +3323,8 @@ function useGameEngine() {
     autoEnabled,
     autoPaused,
     autoRestart,
+    effectsMode,
+    lowMotion,
     battleSpeedMultiplier,
     battleSpeedIndex,
     allTimeRecords,
@@ -3297,6 +3383,7 @@ function useGameEngine() {
     resumeAutoAfterToggle,
     toggleAuto,
     toggleAutoRestart,
+    cycleEffectsMode,
     isBossRound: (r) => isBossRound(r ?? round),
   };
 }
@@ -3469,21 +3556,24 @@ function FloatingNumber({ text, color }) {
 
 /** HP bar with glow animation when low */
 function HpBar({ current, max, isPlayer }) {
+  const lowMotion = useContext(LowMotionContext);
   const pct = Math.round((current / max) * 100);
   const isLow = current <= (isPlayer ? 3 : max * 0.25);
 
   const barBg = isPlayer ? "#001400" : "#1a0000";
   const barBorder = isPlayer ? "#103010" : "#3a1010";
 
+  // Infinite box-shadow glow pulses are the most expensive battle animation on
+  // mobile; drop them entirely in low-motion (the HP-bar fill transition stays).
   let fillGradient, glowAnimation;
   if (isPlayer) {
     fillGradient = isLow
       ? "linear-gradient(90deg, #7B4000, #cc8800)"
       : "linear-gradient(90deg, #006600, #00cc44)";
-    glowAnimation = isLow ? "hpWarningGlow 0.8s infinite" : "none";
+    glowAnimation = isLow && !lowMotion ? "hpWarningGlow 0.8s infinite" : "none";
   } else {
     fillGradient = "linear-gradient(90deg, #7B0000, #dd2222)";
-    glowAnimation = isLow ? "hpCriticalGlow 1s infinite" : "none";
+    glowAnimation = isLow && !lowMotion ? "hpCriticalGlow 1s infinite" : "none";
   }
 
   return (
@@ -3888,6 +3978,7 @@ function SkillsMenu({ skills, onSelectSkill, onClose }) {
 
 /** Scrollable battle log */
 const BattleLog = memo(function BattleLog({ entries }) {
+  const lowMotion = useContext(LowMotionContext);
   const logRef = useRef(null);
 
   useEffect(() => {
@@ -3919,7 +4010,7 @@ const BattleLog = memo(function BattleLog({ entries }) {
             lineHeight: 1.8,
             fontFamily: "'Press Start 2P', monospace",
             color: LOG_COLORS[entry.type] || LOG_COLORS.info,
-            animation: "logSlideIn 0.3s ease",
+            animation: lowMotion ? "none" : "logSlideIn 0.3s ease",
           }}
         >
           {entry.message}
@@ -4407,6 +4498,8 @@ function ShopScreen({
   onBack,
   autoRestart,
   onToggleAutoRestart,
+  effectsMode,
+  onCycleEffects,
 }) {
   const classDef = getLocalizedClass(classKey);
   const isCombo = isComboClassKey(classKey);
@@ -4649,6 +4742,32 @@ function ShopScreen({
           {t("shop.autoRestart")} {autoRestart ? t("shop.autoRestartOn") : t("shop.autoRestartOff")}
           <span style={{ display: "block", fontSize: 6, color: COLORS.muted, marginTop: 4 }}>
             {t("shop.autoRestartHint")}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onCycleEffects}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 8,
+            padding: "10px 12px",
+            borderRadius: 5,
+            cursor: "pointer",
+            border: "2px solid #2a2a3a",
+            background: "#0a0a14",
+            color: "#aaaaff",
+            textAlign: "left",
+            lineHeight: 1.7,
+          }}
+        >
+          {t("shop.effects")}{" "}
+          {effectsMode === "full"
+            ? t("shop.effectsFull")
+            : effectsMode === "reduced"
+              ? t("shop.effectsReduced")
+              : t("shop.effectsAuto")}
+          <span style={{ display: "block", fontSize: 6, color: COLORS.muted, marginTop: 4 }}>
+            {t("shop.effectsHint")}
           </span>
         </button>
         <div
@@ -5047,9 +5166,32 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
   if (flashType === "gold") bgAnimation = "bgFlashGold 0.35s ease";
   if (flashType === "red") bgAnimation = "bgFlashRed 0.35s ease";
 
-  // Split floating numbers by target
-  const enemyFloats = floatingNumbers.filter((f) => f.target === "enemy");
-  const playerFloats = floatingNumbers.filter((f) => f.target === "player");
+  // Split floating numbers by target. Memoized so an unrelated state change
+  // (log entry, turn flip) doesn't hand CombatantDisplay a fresh array and
+  // defeat its memo.
+  const enemyFloats = useMemo(
+    () => floatingNumbers.filter((f) => f.target === "enemy"),
+    [floatingNumbers]
+  );
+  const playerFloats = useMemo(
+    () => floatingNumbers.filter((f) => f.target === "player"),
+    [floatingNumbers]
+  );
+
+  // Stable buffs object (inline {…} previously re-rendered the player panel
+  // every frame).
+  const warCryTurnsLeft = player
+    ? getWarCryBuffTurnsLeft(player, battleTurn)
+    : 0;
+  const playerBuffs = useMemo(
+    () => ({
+      warCryTurnsLeft,
+      hasDodgeBuff: player?.hasDodgeBuff,
+      hasBlockBuff: player?.hasBlockBuff,
+      enemyFrozen,
+    }),
+    [warCryTurnsLeft, player?.hasDodgeBuff, player?.hasBlockBuff, enemyFrozen]
+  );
 
   return (
     <div
@@ -5148,12 +5290,7 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
             isDead={false}
             floats={playerFloats}
             shaking={shakeTarget === "player"}
-            buffs={{
-              warCryTurnsLeft: getWarCryBuffTurnsLeft(player, battleTurn),
-              hasDodgeBuff: player.hasDodgeBuff,
-              hasBlockBuff: player.hasBlockBuff,
-              enemyFrozen,
-            }}
+            buffs={playerBuffs}
           />
         )}
       </div>
@@ -5265,7 +5402,7 @@ export default function BossRush() {
   };
 
   return (
-    <>
+    <LowMotionContext.Provider value={game.lowMotion}>
       <style>{CSS_KEYFRAMES}</style>
 
       {game.scene === "title" && (
@@ -5333,6 +5470,8 @@ export default function BossRush() {
           }}
           autoRestart={game.autoRestart}
           onToggleAutoRestart={game.toggleAutoRestart}
+          effectsMode={game.effectsMode}
+          onCycleEffects={game.cycleEffectsMode}
         />
       )}
 
@@ -5382,6 +5521,6 @@ export default function BossRush() {
           return ok;
         }}
       />
-    </>
+    </LowMotionContext.Provider>
   );
 }
