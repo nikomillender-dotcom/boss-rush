@@ -59,6 +59,24 @@ export const SFX_IDS = [
 let unlocked = false;
 const pool = new Map();
 
+// SFX rate limiting. Firing HTMLAudioElement.play() 10-20x/sec (e.g. 4x AUTO
+// grind) janks iOS Safari's main thread — this was the real cause of mobile
+// battle lag. Cap the overall rate and dedupe rapid repeats of the same sound.
+// Manual/slow play stays well under these thresholds, so it's unaffected.
+const IS_SMALL_SCREEN =
+  typeof window !== "undefined" &&
+  Boolean(window.matchMedia?.("(max-width: 480px)").matches);
+const MIN_GLOBAL_GAP_MS = IS_SMALL_SCREEN ? 90 : 35;
+const MIN_SAME_ID_GAP_MS = 80;
+let lastSfxAt = 0;
+const lastPlayedById = new Map();
+
+function nowMs() {
+  return typeof performance !== "undefined" && performance.now
+    ? performance.now()
+    : Date.now();
+}
+
 export function unlockSfx() {
   unlocked = true;
 }
@@ -98,6 +116,11 @@ function nextAudio(id) {
  */
 export function playSfx(id) {
   if (!unlocked || getMusicMuted() || !id) return;
+  const t = nowMs();
+  if (t - lastSfxAt < MIN_GLOBAL_GAP_MS) return;
+  if (t - (lastPlayedById.get(id) ?? 0) < MIN_SAME_ID_GAP_MS) return;
+  lastSfxAt = t;
+  lastPlayedById.set(id, t);
   try {
     const audio = nextAudio(id);
     audio.muted = false;

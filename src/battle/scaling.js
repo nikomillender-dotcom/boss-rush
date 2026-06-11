@@ -41,9 +41,11 @@ export const SCALING_CONFIG = {
 
   /** Per-purchase stat jump at tier n (1-based). */
   hpDelta: (tier) => 2 * tier,
-  atkDelta: (tier) => 5 * tier,
-  defDelta: (tier) => Math.max(1, tier),
+  atkDelta: (tier) => 3 * tier,
+  defDelta: (tier) => 2 * tier,
   spDelta: (tier) => 1,
+  /** Heal upgrades track HP growth at this fraction (no more +1 heals). */
+  healHpRatio: 0.7,
 
   enemyIndexRate: 0.75,
   enemyScalePower: 1.85,
@@ -142,6 +144,11 @@ export function totalSpBonus(purchaseCount) {
   return sum;
 }
 
+/** Per-level heal jump — mirrors the HP-stat growth curve so heals stay relevant. */
+export function healDelta(tier) {
+  return Math.round(SCALING_CONFIG.hpDelta(tier) * SCALING_CONFIG.healHpRatio);
+}
+
 export function nextHpDelta(currentLevel) {
   return SCALING_CONFIG.hpDelta(currentLevel + 1);
 }
@@ -158,11 +165,22 @@ export function nextSpDelta(currentLevel) {
   return SCALING_CONFIG.spDelta(currentLevel + 1);
 }
 
-/** Round-based enemy HP/ATK scale — ramps toward floor 100. */
+/**
+ * Round-based enemy HP/ATK scale. Power curve + a reshaped late bump:
+ * a touch harder through the mid-game (50→130), then it tapers so the very
+ * late floors (e.g. the floor-200 boss) stop spiking out of control.
+ */
 export function getEnemyRoundScale(round) {
   const r = Math.max(1, round);
   const base = 1 + (r / SCALING_CONFIG.enemyScaleDivisor) ** SCALING_CONFIG.enemyScalePower;
-  const lateBump = r > 50 ? 1 + (r - 50) * 0.02 : 1;
+  let lateBump;
+  if (r <= 50) {
+    lateBump = 1;
+  } else if (r <= 130) {
+    lateBump = 1 + (r - 50) * 0.025; // mid-game: slightly tougher
+  } else {
+    lateBump = 1 + 80 * 0.025 + (r - 130) * 0.005; // past 130: gentle taper
+  }
   return base * lateBump;
 }
 

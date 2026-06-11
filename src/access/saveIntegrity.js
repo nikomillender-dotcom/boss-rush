@@ -21,9 +21,19 @@ export function accountBestFloor(save) {
   return best;
 }
 
+/** Sum of every class's per-class wallet (wallets are per-class as of v1.0.7). */
+function totalWallet(save) {
+  if (!save?.classes) return 0;
+  let sum = 0;
+  for (const meta of Object.values(save.classes)) {
+    sum += Math.max(0, Number(meta?.wallet) || 0);
+  }
+  return sum;
+}
+
 export function computeSaveChecksum(save) {
   const payload = {
-    wallet: Number(save?.wallet) || 0,
+    wallet: totalWallet(save),
     rounds: Number(save?.records?.rounds) || 0,
     coins: Number(save?.records?.coins) || 0,
     bestFloor: accountBestFloor(save),

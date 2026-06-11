@@ -62,6 +62,24 @@ function sanitizeSave(input) {
       delete clean[key];
     }
   }
+  // Per-class wallets (v1.0.7): clamp each class's coins to sane bounds.
+  if (isPlainObject(clean.classes)) {
+    const classes = {};
+    for (const [classKey, meta] of Object.entries(clean.classes)) {
+      if (!isPlainObject(meta)) continue;
+      const next = { ...meta };
+      if (typeof next.wallet !== "undefined") {
+        const w = Number(next.wallet);
+        next.wallet = Number.isFinite(w) && w >= 0 ? Math.min(Math.floor(w), MAX_WALLET) : 0;
+      }
+      if (typeof next.megaBossKills !== "undefined") {
+        const k = Number(next.megaBossKills);
+        next.megaBossKills = Number.isFinite(k) && k >= 0 ? Math.floor(k) : 0;
+      }
+      classes[classKey] = next;
+    }
+    clean.classes = classes;
+  }
   if (clean.records) {
     const records = { ...clean.records };
     for (const key of ["coins", "rounds", "streak"]) {

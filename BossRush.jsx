@@ -57,6 +57,7 @@ import {
   totalHpBonus,
   totalAtkBonus,
   totalDefBonus,
+  healDelta,
   nextHpDelta,
   nextAtkDelta,
   nextDefDelta,
@@ -393,7 +394,7 @@ const WEAPON_BLUEPRINTS = [
   { id: "iron_blade", classKey: "warrior", name: "Iron Blade", tier: 1, attackMult: 1.25, description: "×1.25 attack." },
   { id: "steel_cleaver", classKey: "warrior", name: "Steel Cleaver", tier: 2, attackMult: 1.5, description: "×1.5 attack." },
   { id: "warlord_axe", classKey: "warrior", name: "Warlord Axe", tier: 3, attackMult: 2, description: "×2 attack." },
-  { id: "starfall_blade", classKey: "warrior", name: "Starfall Blade", tier: 4, attackMult: 2.5, description: "×2.5 attack." },
+  { id: "starfall_blade", classKey: "warrior", name: "Starfall Blade", tier: 4, attackMult: 2.5, description: "×2.5 attack. Lifesteal 8% on attacks.", passive: { type: "lifesteal", value: 0.08 } },
   { id: "gnarled_staff", classKey: "mage", name: "Gnarled Staff", tier: 0, attackMult: 1, description: "Starter focus." },
   { id: "crystal_staff", classKey: "mage", name: "Crystal Staff", tier: 1, attackMult: 1.25, description: "×1.25 attack." },
   { id: "arcane_scepter", classKey: "mage", name: "Arcane Scepter", tier: 2, attackMult: 1.5, description: "×1.5 attack." },
@@ -451,6 +452,16 @@ function getWeaponAttackMult(weapon) {
   if (weapon.attackMult != null) return weapon.attackMult;
   const legacy = { 0: 1, 1: 1.25, 2: 1.5, 3: 2 };
   return legacy[weapon.attackBonus] ?? 1;
+}
+
+/**
+ * Optional weapon passive (applied on basic attacks). Shape:
+ *   { type: "lifesteal", value: 0.08 }  // heal 8% of fight damage dealt
+ * Only one example ships for now; add more by giving a WEAPON_BLUEPRINTS entry
+ * a `passive` field and handling its `type` in applyWeaponPassiveOnHit.
+ */
+function getWeaponPassive(weaponId) {
+  return WEAPONS.find((w) => w.id === weaponId)?.passive ?? null;
 }
 
 const CLASSES = {
@@ -856,6 +867,8 @@ function createDefaultClassMeta(classKey) {
     ownedWeaponIds: hasWeapons ? [DEFAULT_WEAPON_IDS[classKey]] : [],
     bossesDefeated: [],
     bestFloorReached: 0,
+    wallet: 0,
+    megaBossKills: 0,
   };
 }
 
@@ -876,6 +889,8 @@ function createDefaultComboMeta(comboKey) {
     ownedWeaponIds: starter ? [starter] : [],
     bossesDefeated: [],
     bestFloorReached: 0,
+    wallet: 0,
+    megaBossKills: 0,
   };
 }
 
@@ -932,11 +947,28 @@ function createDefaultSave() {
     classes[comboKey] = createDefaultComboMeta(comboKey);
   }
   return {
-    wallet: 0,
     locale: "en",
     classes,
     records: { coins: 0, streak: 0, rounds: 0 },
     unlocks: { ...DEFAULT_UNLOCKS },
+  };
+}
+
+/** Per-class spendable coins (each class has its own economy / identity). */
+function getClassWallet(save, classKey) {
+  if (!classKey) return 0;
+  return Math.max(0, Number(save?.classes?.[classKey]?.wallet) || 0);
+}
+
+function setClassWallet(save, classKey, amount) {
+  if (!classKey) return save;
+  const meta = getClassMetaFromSave(save, classKey);
+  return {
+    ...save,
+    classes: {
+      ...save.classes,
+      [classKey]: { ...meta, wallet: Math.max(0, Math.floor(amount)) },
+    },
   };
 }
 
@@ -981,6 +1013,19 @@ function recordBossDefeat(save, classKey, floor) {
     classes: {
       ...save.classes,
       [classKey]: { ...meta, bossesDefeated },
+    },
+  };
+}
+
+/** Count every floor-100 (mega-boss) clear for this class — drives the future floor-skipper unlock. */
+function recordMegaBossKill(save, classKey) {
+  if (!classKey) return save;
+  const meta = getClassMetaFromSave(save, classKey);
+  return {
+    ...save,
+    classes: {
+      ...save.classes,
+      [classKey]: { ...meta, megaBossKills: (Number(meta.megaBossKills) || 0) + 1 },
     },
   };
 }
@@ -1034,9 +1079,11 @@ function getEffectiveDefense(player, battleTurn) {
 }
 
 function calcHealAmount(baseHeal, level) {
+  // Heal upgrades mirror the HP-stat growth curve (healDelta = ~70% of hpDelta),
+  // so a maxed heal restores a real fraction of max HP instead of a flat ~195.
   let heal = baseHeal;
   for (let i = 1; i <= level; i++) {
-    heal += i <= 5 ? 1 : 2;
+    heal += healDelta(i);
   }
   return heal;
 }
@@ -1064,7 +1111,9 @@ function loadSave() {
     if (raw) {
       const data = JSON.parse(raw);
       const save = createDefaultSave();
-      save.wallet = Number(data.wallet) || 0;
+      // Per-class wallet migration (fresh start): the old global `data.wallet`
+      // is intentionally dropped; each class's wallet defaults to 0.
+      const isLegacyGlobalWallet = typeof data.wallet !== "undefined";
       if (data.locale === "en" || data.locale === "es") save.locale = data.locale;
       if (data.records) {
         save.records = {
@@ -1104,6 +1153,8 @@ function loadSave() {
             ? incoming.bossesDefeated.map(Number).filter((n) => n > 0)
             : [],
           bestFloorReached: Math.max(0, Number(incoming.bestFloorReached) || 0),
+          wallet: Math.max(0, Math.floor(Number(incoming.wallet) || 0)),
+          megaBossKills: Math.max(0, Math.floor(Number(incoming.megaBossKills) || 0)),
         };
         save.classes[key] = syncBossesDefeatedFromBestFloor(save.classes[key]);
       }
@@ -1129,11 +1180,19 @@ function loadSave() {
             ? incoming.bossesDefeated.map(Number).filter((n) => n > 0)
             : [],
           bestFloorReached: Math.max(0, Number(incoming.bestFloorReached) || 0),
+          wallet: Math.max(0, Math.floor(Number(incoming.wallet) || 0)),
+          megaBossKills: Math.max(0, Math.floor(Number(incoming.megaBossKills) || 0)),
         };
         save.classes[comboKey] = syncBossesDefeatedFromBestFloor(save.classes[comboKey]);
       }
       const merged = mergeMissingClassMetas(save);
       const synced = syncAllComboUnlocks(merged);
+      // Legacy (global-wallet) saves predate the per-class checksum, so their
+      // stored checksum can't match the new formula — re-bless them once
+      // instead of letting verifySaveIntegrity wipe legit records.
+      if (isLegacyGlobalWallet) {
+        return persistSave(synced);
+      }
       const checked = verifySaveIntegrity({
         ...synced,
         _saveChecksum: data._saveChecksum,
@@ -1430,6 +1489,7 @@ function buildPlayer(classKey, classMeta, save = null) {
       defense: innate.defense + totalDefBonus(comboMeta.defBoost),
       weapon: innate.weaponName,
       weaponId: comboMeta.equippedWeaponId,
+      weaponPassive: getWeaponPassive(comboMeta.equippedWeaponId),
       skills,
       warCryBuffExpiresOnTurn: null,
       hasDodgeBuff: false,
@@ -1464,6 +1524,7 @@ function buildPlayer(classKey, classMeta, save = null) {
     defense: (classDef.baseDefense ?? 0) + totalDefBonus(meta.defBoost ?? 0),
     weapon: weapon?.name ?? classDef.weapon,
     weaponId: weapon?.id ?? DEFAULT_WEAPON_IDS[classKey],
+    weaponPassive: getWeaponPassive(weapon?.id ?? DEFAULT_WEAPON_IDS[classKey]),
     skills,
     warCryBuffExpiresOnTurn: null,
     hasDodgeBuff: false,
@@ -1554,7 +1615,7 @@ function useGameEngine() {
   const [player, setPlayer] = useState(null);
   const [enemy, setEnemy] = useState(null);
   const [turn, setTurn] = useState("player");
-  const [wallet, setWallet] = useState(() => loadSave().wallet);
+  const [wallet, setWallet] = useState(0);
   const [runCoinsEarned, setRunCoinsEarned] = useState(0);
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
@@ -1808,13 +1869,21 @@ function useGameEngine() {
     }
   }
 
+  /** The class whose wallet is currently active: the fighter in battle, else the camp selection. */
+  function activeWalletClassKey() {
+    if (sceneRef.current === "battle") {
+      return playerRef.current?.classKey ?? selectedClassKeyRef.current ?? null;
+    }
+    return selectedClassKeyRef.current ?? playerRef.current?.classKey ?? null;
+  }
+
   function addWallet(amount) {
     if (amount <= 0) return;
+    const key = activeWalletClassKey();
     setWallet((prev) => {
       const next = prev + amount;
       walletRef.current = next;
-      const nextSave = { ...saveRef.current, wallet: next };
-      commitSave(nextSave);
+      if (key) commitSave(setClassWallet(saveRef.current, key, next));
       return next;
     });
     setRunCoinsEarned((r) => r + amount);
@@ -1823,10 +1892,11 @@ function useGameEngine() {
 
   function spendWallet(amount) {
     if (walletRef.current < amount) return false;
+    const key = activeWalletClassKey();
     const next = walletRef.current - amount;
     walletRef.current = next;
     setWallet(next);
-    commitSave({ ...saveRef.current, wallet: next });
+    if (key) commitSave(setClassWallet(saveRef.current, key, next));
     return true;
   }
 
@@ -2058,6 +2128,11 @@ function useGameEngine() {
     const foe = enemyRef.current;
     const classKey = playerRef.current?.classKey;
     if (!foe || !classKey) return;
+
+    // Auto-skipping the floor-100 boss still counts toward the skipper unlock.
+    if (roundRef.current === BATTLE_SCALING.megaBossRound) {
+      commitSave(recordMegaBossKill(saveRef.current, classKey));
+    }
 
     const newStreak = streakRef.current + 1;
     const multiplier = getStreakMultiplier(newStreak);
@@ -2494,7 +2569,11 @@ function useGameEngine() {
     const classKey = playerRef.current?.classKey;
     const currentRound = roundRef.current;
     if (classKey && isBossRound(currentRound)) {
-      commitSave(recordBossDefeat(saveRef.current, classKey, currentRound));
+      let nextSave = recordBossDefeat(saveRef.current, classKey, currentRound);
+      if (currentRound === BATTLE_SCALING.megaBossRound) {
+        nextSave = recordMegaBossKill(nextSave, classKey);
+      }
+      commitSave(nextSave);
     }
 
     const nextRound = currentRound + 1;
@@ -2554,7 +2633,10 @@ function useGameEngine() {
     setBattleTurn(0);
     battleTurnRef.current = 0;
     addLogEntry(t("battle.playerFallen"), "bad");
-    commitSave({ ...saveRef.current, wallet: walletRef.current });
+    const deathClass = playerRef.current?.classKey ?? selectedClassKeyRef.current;
+    if (deathClass) {
+      commitSave(setClassWallet(saveRef.current, deathClass, walletRef.current));
+    }
     updateRecordsFromRun();
 
     // Grind loop: silently redeploy the same class with AUTO still running,
@@ -2598,6 +2680,12 @@ function useGameEngine() {
       if (next !== saveRef.current) commitSave(next);
     }
     setSelectedClassKey(classKey);
+    // Load this class's own wallet (per-class economy). Set the ref eagerly so
+    // activeWalletClassKey + any immediate spend resolve to this class.
+    selectedClassKeyRef.current = classKey;
+    const w = getClassWallet(saveRef.current, classKey);
+    walletRef.current = w;
+    setWallet(w);
     playSfx("ui_confirm");
     setScene("shop");
   }
@@ -2615,49 +2703,46 @@ function useGameEngine() {
     commitSave(nextSave);
   }
 
-  function buyHpBoost() {
-    const key = selectedClassKey;
-    if (!key) return;
-    const meta = getClassMetaFromSave(saveRef.current, key);
-    const maxHp = getShopMaxBoost(key);
-    if (meta.hpBoost >= maxHp) return;
-    const price = shopPriceForClass(key, SHOP_CONFIG.hpPrice, meta.hpBoost);
-    if (!spendWallet(price)) {
-      playSfx("ui_error");
-      return;
+  /** How many upgrade steps the wallet can afford, up to qty and the level cap. */
+  function affordableSteps(key, priceFn, startLevel, maxLevel, qty) {
+    let bought = 0;
+    let spent = 0;
+    let budget = walletRef.current;
+    while (bought < qty && startLevel + bought < maxLevel) {
+      const price = shopPriceForClass(key, priceFn, startLevel + bought);
+      if (budget < price) break;
+      budget -= price;
+      spent += price;
+      bought += 1;
     }
-    playSfx("camp_buy");
-    patchClassMeta(key, { hpBoost: meta.hpBoost + 1 });
+    return { bought, spent };
   }
 
-  function buyAtkBoost() {
+  function buyStatBatch(statKey, priceFn, qty = 1) {
     const key = selectedClassKey;
     if (!key) return;
     const meta = getClassMetaFromSave(saveRef.current, key);
-    const maxAtk = getShopMaxBoost(key);
-    if (meta.atkBoost >= maxAtk) return;
-    const price = shopPriceForClass(key, SHOP_CONFIG.atkPrice, meta.atkBoost);
-    if (!spendWallet(price)) {
+    const max = getShopMaxBoost(key);
+    const cur = meta[statKey] ?? 0;
+    const { bought, spent } = affordableSteps(key, priceFn, cur, max, Math.max(1, qty));
+    if (bought === 0 || !spendWallet(spent)) {
       playSfx("ui_error");
       return;
     }
     playSfx("camp_buy");
-    patchClassMeta(key, { atkBoost: meta.atkBoost + 1 });
+    patchClassMeta(key, { [statKey]: cur + bought });
   }
 
-  function buyDefBoost() {
-    const key = selectedClassKey;
-    if (!key) return;
-    const meta = getClassMetaFromSave(saveRef.current, key);
-    const maxDef = getShopMaxBoost(key);
-    if (meta.defBoost >= maxDef) return;
-    const price = shopPriceForClass(key, SHOP_CONFIG.defPrice, meta.defBoost);
-    if (!spendWallet(price)) {
-      playSfx("ui_error");
-      return;
-    }
-    playSfx("camp_buy");
-    patchClassMeta(key, { defBoost: meta.defBoost + 1 });
+  function buyHpBoost(qty = 1) {
+    buyStatBatch("hpBoost", SHOP_CONFIG.hpPrice, qty);
+  }
+
+  function buyAtkBoost(qty = 1) {
+    buyStatBatch("atkBoost", SHOP_CONFIG.atkPrice, qty);
+  }
+
+  function buyDefBoost(qty = 1) {
+    buyStatBatch("defBoost", SHOP_CONFIG.defPrice, qty);
   }
 
   function buyWeapon(weaponId) {
@@ -2684,21 +2769,26 @@ function useGameEngine() {
     });
   }
 
-  function buySkillUpgrade(skillId) {
+  function buySkillUpgrade(skillId, qty = 1) {
     const key = selectedClassKey;
     if (!key) return;
     const meta = getClassMetaFromSave(saveRef.current, key);
     const level = meta.skillLevels[skillId] ?? 0;
     const maxLv = getShopMaxSkillLevel(key);
-    if (level >= maxLv) return;
-    const price = shopPriceForClass(key, SHOP_CONFIG.skillPrice, level);
-    if (!spendWallet(price)) {
+    const { bought, spent } = affordableSteps(
+      key,
+      SHOP_CONFIG.skillPrice,
+      level,
+      maxLv,
+      Math.max(1, qty)
+    );
+    if (bought === 0 || !spendWallet(spent)) {
       playSfx("ui_error");
       return;
     }
     playSfx("camp_buy");
     patchClassMeta(key, {
-      skillLevels: { ...meta.skillLevels, [skillId]: level + 1 },
+      skillLevels: { ...meta.skillLevels, [skillId]: level + bought },
     });
   }
 
@@ -2718,6 +2808,10 @@ function useGameEngine() {
       saveRef.current
     );
     setPlayer(playerState);
+    // This class's own wallet is what the run earns into / the HUD shows.
+    const startWallet = getClassWallet(saveRef.current, classKey);
+    walletRef.current = startWallet;
+    setWallet(startWallet);
     setEnemy(buildEnemy(1));
     setRunCoinsEarned(0);
     setStreak(0);
@@ -2770,6 +2864,22 @@ function useGameEngine() {
     return damage;
   }
 
+  /** Apply the equipped weapon's passive on a basic attack (one example: lifesteal). */
+  function applyWeaponPassiveOnHit(damage) {
+    const passive = playerRef.current?.weaponPassive;
+    if (!passive || damage <= 0) return;
+    if (passive.type === "lifesteal") {
+      const heal = Math.max(1, Math.round(damage * passive.value));
+      commitPlayer((pl) => {
+        if (!pl) return pl;
+        const hp = Math.min(pl.maxHp, pl.hp + heal);
+        if (hp === pl.hp) return pl;
+        spawnFloat(`+${heal}`, "player", "#00ff99");
+        return { ...pl, hp };
+      });
+    }
+  }
+
   function performFight() {
     const p = playerRef.current;
     const foe = enemyRef.current;
@@ -2807,6 +2917,7 @@ function useGameEngine() {
         hit1.isCrit,
         hit1.isCrit ? "fight_hit_crit" : "fight_hit"
       );
+      applyWeaponPassiveOnHit(dmg1 + dmg2);
       resolveEnemyDamage(dmg1, () => {
         const current = enemyRef.current;
         if (!current || current.hp <= 0) return;
@@ -2841,6 +2952,7 @@ function useGameEngine() {
       null,
       crit ? "fight_hit_crit" : "fight_hit"
     );
+    applyWeaponPassiveOnHit(damage);
   }
 
   function actionFight() {
@@ -4336,7 +4448,9 @@ function TitleScreen({
   );
 }
 
-function ShopSection({ title, children }) {
+/** Collapsible camp section (the long-requested dropdown menus). */
+function ShopSection({ title, children, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div
       style={{
@@ -4346,29 +4460,42 @@ function ShopSection({ title, children }) {
         overflow: "hidden",
       }}
     >
-      <div
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
         style={{
-          padding: "6px 10px",
+          width: "100%",
+          padding: "8px 10px",
           background: "#10102a",
           color: COLORS.fight,
           fontFamily: "'Press Start 2P', monospace",
           fontSize: 7,
           textAlign: "left",
-          borderBottom: "1px solid #1f1f33",
-        }}
-      >
-        {title}
-      </div>
-      <div
-        style={{
-          padding: 8,
+          borderBottom: open ? "1px solid #1f1f33" : "none",
+          borderTop: "none",
+          borderLeft: "none",
+          borderRight: "none",
+          cursor: "pointer",
           display: "flex",
-          flexDirection: "column",
-          gap: 4,
+          justifyContent: "space-between",
+          alignItems: "center",
         }}
       >
-        {children}
-      </div>
+        <span>{title}</span>
+        <span style={{ color: COLORS.dimmed }}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            padding: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -4515,9 +4642,19 @@ function ShopScreen({
 
   const skillBases = isCombo ? getComboSkillBases(classKey) : CLASSES[classKey].skills;
   const boostsTitle = isCombo ? t("shop.comboUpgrades") : t("shop.permanentBoosts");
-  const hpPrice = priceMult(SHOP_CONFIG.hpPrice(classMeta?.hpBoost ?? 0));
-  const atkPrice = priceMult(SHOP_CONFIG.atkPrice(classMeta?.atkBoost ?? 0));
-  const defPrice = priceMult(SHOP_CONFIG.defPrice(classMeta?.defBoost ?? 0));
+
+  // Batch buying (×1 / ×5 / ×10). batchInfo sums the next `steps` prices so the
+  // button shows the real stack cost and disables when unaffordable / maxed.
+  const [buyQty, setBuyQty] = useState(1);
+  const batchInfo = (priceFn, level, max) => {
+    const steps = Math.max(0, Math.min(buyQty, (max ?? 0) - level));
+    let cost = 0;
+    for (let i = 0; i < steps; i++) cost += priceMult(priceFn(level + i));
+    return { steps, cost };
+  };
+  const hpBatch = batchInfo(SHOP_CONFIG.hpPrice, classMeta?.hpBoost ?? 0, shopMaxBoost);
+  const atkBatch = batchInfo(SHOP_CONFIG.atkPrice, classMeta?.atkBoost ?? 0, shopMaxBoost);
+  const defBatch = batchInfo(SHOP_CONFIG.defPrice, classMeta?.defBoost ?? 0, shopMaxBoost);
 
   return (
     <div
@@ -4585,14 +4722,36 @@ function ShopScreen({
 
       {classMeta && (
         <ShopSection title={boostsTitle}>
+          <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+            {[1, 5, 10].map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => setBuyQty(q)}
+                style={{
+                  flex: 1,
+                  fontFamily: "'Press Start 2P', monospace",
+                  fontSize: 8,
+                  padding: "6px 4px",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  border: `2px solid ${buyQty === q ? COLORS.gold : "#2a2a3a"}`,
+                  background: buyQty === q ? `${COLORS.gold}22` : "#0a0a14",
+                  color: buyQty === q ? COLORS.gold : COLORS.dimmed,
+                }}
+              >
+                ×{q}
+              </button>
+            ))}
+          </div>
           <StatRow
             icon="❤️"
             label={t("stat.maxHp")}
             level={classMeta.hpBoost}
             max={shopMaxBoost}
-            price={hpPrice}
-            onBuy={onBuyHp}
-            disabled={wallet < hpPrice}
+            price={hpBatch.cost}
+            onBuy={() => onBuyHp(buyQty)}
+            disabled={hpBatch.steps === 0 || wallet < hpBatch.cost}
             maxed={classMeta.hpBoost >= shopMaxBoost}
             color="green"
           />
@@ -4601,9 +4760,9 @@ function ShopScreen({
             label={t("stat.attack")}
             level={classMeta.atkBoost}
             max={shopMaxBoost}
-            price={atkPrice}
-            onBuy={onBuyAtk}
-            disabled={wallet < atkPrice}
+            price={atkBatch.cost}
+            onBuy={() => onBuyAtk(buyQty)}
+            disabled={atkBatch.steps === 0 || wallet < atkBatch.cost}
             maxed={classMeta.atkBoost >= shopMaxBoost}
             color="red"
           />
@@ -4612,9 +4771,9 @@ function ShopScreen({
             label={t("stat.defense")}
             level={classMeta.defBoost}
             max={shopMaxBoost}
-            price={defPrice}
-            onBuy={onBuyDef}
-            disabled={wallet < defPrice}
+            price={defBatch.cost}
+            onBuy={() => onBuyDef(buyQty)}
+            disabled={defBatch.steps === 0 || wallet < defBatch.cost}
             maxed={classMeta.defBoost >= shopMaxBoost}
             color="blue"
           />
@@ -4622,7 +4781,7 @@ function ShopScreen({
       )}
 
       {classMeta && weapons.length > 0 && (
-        <ShopSection title={t("shop.weapons")}>
+        <ShopSection title={t("shop.weapons")} defaultOpen={false}>
           <div
             style={{
               display: "grid",
@@ -4678,15 +4837,13 @@ function ShopScreen({
       )}
 
       {classMeta && (
-        <ShopSection title={t("shop.skillUpgrades")}>
+        <ShopSection title={t("shop.skillUpgrades")} defaultOpen={false}>
           {skillBases.map((rawBase) => {
             const base = localizeSkillTemplate(rawBase);
             const level = classMeta.skillLevels[rawBase.id] ?? 0;
             const maxed = level >= shopMaxSkill;
-            const price = isCombo
-              ? priceMult(SHOP_CONFIG.skillPrice(level))
-              : SHOP_CONFIG.skillPrice(level);
-            const canBuy = !maxed && wallet >= price;
+            const { steps, cost } = batchInfo(SHOP_CONFIG.skillPrice, level, shopMaxSkill);
+            const canBuy = !maxed && steps > 0 && wallet >= cost;
             const sub = !maxed
               ? `${t("shop.next")} ${describeSkillUpgrade(rawBase, level + 1, previewAttack, classKey)}`
               : null;
@@ -4697,8 +4854,8 @@ function ShopScreen({
                 label={base.name}
                 level={level}
                 max={shopMaxSkill}
-                price={price}
-                onBuy={() => onBuySkill(rawBase.id)}
+                price={cost}
+                onBuy={() => onBuySkill(rawBase.id, buyQty)}
                 disabled={!canBuy}
                 maxed={maxed}
                 sub={sub}
@@ -4918,7 +5075,10 @@ function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRec
           {t("select.heading")}
         </div>
         <div style={{ fontSize: 8, color: COLORS.gold, marginBottom: 4 }}>
-          {t("select.wallet")} 💰 {wallet.toLocaleString()}
+          {t("select.totalCoins")} 💰{" "}
+          {[...CLASS_KEYS, ...COMBO_CLASS_KEYS]
+            .reduce((sum, k) => sum + getClassWallet(save, k), 0)
+            .toLocaleString()}
         </div>
         {allTimeRecords?.rounds > 0 && (
           <div style={{ fontSize: 7, color: COLORS.muted }}>
@@ -4958,7 +5118,7 @@ function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRec
             disabled={!unlocked}
             hint={
               unlocked
-                ? `${t("select.bestFloor")} ${best}`
+                ? `${t("select.bestFloor")} ${best} · 💰 ${getClassWallet(save, key).toLocaleString()}`
                 : baseClassUnlockHint(save, key, accessMode)
             }
           />
@@ -4975,7 +5135,7 @@ function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRec
             classKey={comboKey}
             cls={getLocalizedClass(comboKey)}
             onSelect={onSelect}
-            hint={`${getLocalizedClass(comboKey).description} · ${t("select.bestFloor")} ${best}`}
+            hint={`${t("select.bestFloor")} ${best} · 💰 ${getClassWallet(save, comboKey).toLocaleString()}`}
           />
         );
       })}

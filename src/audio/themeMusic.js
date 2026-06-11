@@ -57,25 +57,6 @@ let battleStarting = false;
 let unlocked = false;
 
 const fileExistsCache = new Map();
-let loopResetCount = 0;
-
-function debugLog(runId, hypothesisId, location, message, data = {}) {
-  // #region agent log
-  fetch("http://127.0.0.1:7481/ingest/7717fbd8-b2fd-4e77-9f73-238fcec14f76", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0a40b8" },
-    body: JSON.stringify({
-      sessionId: "0a40b8",
-      runId,
-      hypothesisId,
-      location,
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-}
 
 function isMuted() {
   try {
@@ -105,30 +86,14 @@ function applyMute() {
   if (battleAudio) battleAudio.muted = m;
 }
 
-function attachSeamlessLoop(audio, src) {
-  const tailTrim = LOOP_TAIL_TRIM_BY_SRC[src] ?? DEFAULT_LOOP_TAIL_TRIM;
+function attachSeamlessLoop(audio) {
   // Native loop is more reliable on mobile than timeupdate rewinds.
   audio.loop = true;
-  debugLog("post-fix", "H1", "themeMusic.js:109", "loop-configured", {
-    src,
-    loop: audio.loop,
-    tailTrim,
-  });
   audio.addEventListener("ended", () => {
-    debugLog("pre-fix", "H1", "themeMusic.js:125", "audio-ended", {
-      src,
-      currentTime: audio.currentTime,
-      duration: audio.duration,
-    });
     // Fallback for browsers that still fire ended despite loop=true.
     if (!audio.loop) return;
-    loopResetCount += 1;
     audio.currentTime = 0;
     audio.play().catch(() => {});
-    debugLog("post-fix", "H1", "themeMusic.js:134", "loop-ended-fallback-restart", {
-      src,
-      resetCount: loopResetCount,
-    });
   });
 }
 
@@ -138,7 +103,7 @@ function makeAudio(src, volume) {
   a.playbackRate = 1;
   a.preload = "auto";
   a.muted = isMuted();
-  attachSeamlessLoop(a, src);
+  attachSeamlessLoop(a);
   return a;
 }
 
@@ -308,15 +273,6 @@ async function resolveBattleTrackSrc(round, { autoEnabled = false } = {}) {
 }
 
 export async function playThemeForRound(round, { autoEnabled = false } = {}) {
-  debugLog("pre-fix", "H1", "themeMusic.js:297", "play-theme-request", {
-    round,
-    autoEnabled,
-    unlocked,
-    battleStarting,
-    currentBattleSrc,
-    hasBattleAudio: Boolean(battleAudio),
-    isPlaying: isPlaying(battleAudio),
-  });
   if (!unlocked || battleStarting) return;
   const src = await resolveBattleTrackSrc(round, { autoEnabled });
 

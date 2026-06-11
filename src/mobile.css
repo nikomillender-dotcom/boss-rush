@@ -52,6 +52,12 @@ button,
 }
 
 @media (max-width: 480px) {
+  /* Zoom the whole game out on phones so dense screens (camp, battle) fit
+     with breathing room. `zoom` is supported on iOS Safari + Chrome. */
+  #root {
+    zoom: 0.85;
+  }
+
   .class-select-card {
     padding: 10px 12px !important;
     gap: 10px !important;
