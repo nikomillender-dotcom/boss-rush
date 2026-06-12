@@ -938,6 +938,31 @@ function shopPriceForClass(classKey, priceFn, level) {
   return isComboClassKey(classKey) ? comboShopPrice(base) : base;
 }
 
+/**
+ * Total coins a class has sunk into stat boosts + skill levels — i.e. the exact
+ * respec refund. Prices are deterministic and unchanged, so summing each level's
+ * cost returns precisely what was paid (combo ×3 included via shopPriceForClass).
+ * Weapons and spBoost are excluded.
+ */
+function computeRespecRefund(meta, classKey) {
+  if (!meta) return 0;
+  let refund = 0;
+  const stats = [
+    ["hpBoost", hpPrice],
+    ["atkBoost", atkPrice],
+    ["defBoost", defPrice],
+  ];
+  for (const [statKey, priceFn] of stats) {
+    const level = Math.max(0, Number(meta[statKey]) || 0);
+    for (let i = 0; i < level; i++) refund += shopPriceForClass(classKey, priceFn, i);
+  }
+  for (const lvl of Object.values(meta.skillLevels ?? {})) {
+    const level = Math.max(0, Number(lvl) || 0);
+    for (let i = 0; i < level; i++) refund += shopPriceForClass(classKey, skillPrice, i);
+  }
+  return refund;
+}
+
 function createDefaultSave() {
   const classes = {};
   for (const key of CLASS_KEYS) {
@@ -2703,6 +2728,37 @@ function useGameEngine() {
     commitSave(nextSave);
   }
 
+  /** Refund all stat + skill upgrades into this class's wallet and zero them (weapons kept). */
+  function respecClass() {
+    const key = selectedClassKey;
+    if (!key) return;
+    const meta = getClassMetaFromSave(saveRef.current, key);
+    const refund = computeRespecRefund(meta, key);
+    if (refund <= 0) {
+      playSfx("ui_error");
+      return;
+    }
+    const resetSkills = {};
+    for (const id of Object.keys(meta.skillLevels ?? {})) resetSkills[id] = 0;
+    const newWallet = (Number(meta.wallet) || 0) + refund;
+    const nextMeta = {
+      ...meta,
+      hpBoost: 0,
+      atkBoost: 0,
+      defBoost: 0,
+      spBoost: 0,
+      skillLevels: resetSkills,
+      wallet: newWallet,
+    };
+    commitSave({
+      ...saveRef.current,
+      classes: { ...saveRef.current.classes, [key]: nextMeta },
+    });
+    walletRef.current = newWallet;
+    setWallet(newWallet);
+    playSfx("camp_buy");
+  }
+
   /** How many upgrade steps the wallet can afford, up to qty and the level cap. */
   function affordableSteps(key, priceFn, startLevel, maxLevel, qty) {
     let bought = 0;
@@ -3496,6 +3552,7 @@ function useGameEngine() {
     toggleAuto,
     toggleAutoRestart,
     cycleEffectsMode,
+    respecClass,
     isBossRound: (r) => isBossRound(r ?? round),
   };
 }
@@ -4627,6 +4684,7 @@ function ShopScreen({
   onToggleAutoRestart,
   effectsMode,
   onCycleEffects,
+  onRespec,
 }) {
   const classDef = getLocalizedClass(classKey);
   const isCombo = isComboClassKey(classKey);
@@ -4655,6 +4713,7 @@ function ShopScreen({
   const hpBatch = batchInfo(SHOP_CONFIG.hpPrice, classMeta?.hpBoost ?? 0, shopMaxBoost);
   const atkBatch = batchInfo(SHOP_CONFIG.atkPrice, classMeta?.atkBoost ?? 0, shopMaxBoost);
   const defBatch = batchInfo(SHOP_CONFIG.defPrice, classMeta?.defBoost ?? 0, shopMaxBoost);
+  const respecRefund = classMeta ? computeRespecRefund(classMeta, classKey) : 0;
 
   return (
     <div
@@ -4777,6 +4836,36 @@ function ShopScreen({
             maxed={classMeta.defBoost >= shopMaxBoost}
             color="blue"
           />
+          <button
+            type="button"
+            disabled={respecRefund <= 0}
+            onClick={() => {
+              if (respecRefund <= 0) return;
+              if (window.confirm(t("shop.respecConfirm", { coins: respecRefund.toLocaleString() }))) {
+                onRespec();
+              }
+            }}
+            style={{
+              marginTop: 4,
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 7,
+              padding: "8px 10px",
+              borderRadius: 5,
+              cursor: respecRefund <= 0 ? "not-allowed" : "pointer",
+              border: `1px solid ${respecRefund <= 0 ? "#2a2a3a" : "#cc9933"}`,
+              background: respecRefund <= 0 ? "#0a0a14" : "#cc993322",
+              color: respecRefund <= 0 ? COLORS.dimmed : "#e0b050",
+              textAlign: "left",
+              lineHeight: 1.7,
+            }}
+          >
+            {respecRefund <= 0
+              ? t("shop.respecNone")
+              : t("shop.respecAmount", { coins: respecRefund.toLocaleString() })}
+            <span style={{ display: "block", fontSize: 6, color: COLORS.muted, marginTop: 3 }}>
+              {t("shop.respecHint")}
+            </span>
+          </button>
         </ShopSection>
       )}
 
@@ -5632,6 +5721,7 @@ export default function BossRush() {
           onToggleAutoRestart={game.toggleAutoRestart}
           effectsMode={game.effectsMode}
           onCycleEffects={game.cycleEffectsMode}
+          onRespec={game.respecClass}
         />
       )}
 
