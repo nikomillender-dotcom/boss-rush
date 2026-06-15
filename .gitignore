@@ -2,6 +2,7 @@ node_modules
 dist
 dist-demo
 dist-full
+dist-electron
 /*.zip
 .DS_Store
 *.local
