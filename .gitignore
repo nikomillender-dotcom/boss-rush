@@ -1,5 +1,8 @@
 node_modules
 dist
+dist-demo
+dist-full
+/*.zip
 .DS_Store
 *.local
 .cursor

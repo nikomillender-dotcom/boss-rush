@@ -11,7 +11,8 @@
 
 import { getMusicMuted } from "./themeMusic.js";
 
-const SFX_BASE = "/audio/sfx/";
+// Relative for itch.io (served from a sandboxed subpath); "/" in dev.
+const SFX_BASE = `${import.meta.env.BASE_URL}audio/sfx/`;
 const SFX_VOL = 0.3;
 const POOL_PER_ID = 3;
 

@@ -83,17 +83,8 @@ import {
   hasAnyReadySkill,
 } from "./src/battle/ff1TurnResolver.js";
 import { t, setLocale } from "./src/i18n/index.js";
-import {
-  DEMO_MAX_FLOOR,
-  PAYHIP_CHECKOUT_URL,
-  STRIPE_ENABLED,
-} from "./src/access/constants.js";
-import {
-  getAccessMode,
-  setServerPurchased,
-  hasServerPurchaseFlag,
-} from "./src/access/accessMode.js";
-import { validateLicenseKey } from "./src/access/validateLicense.js";
+import { DEMO_MAX_FLOOR, ITCH_FULL_URL } from "./src/access/constants.js";
+import { getAccessMode } from "./src/access/accessMode.js";
 import {
   isBaseClassUnlockedForAccess,
   baseClassUnlockHintForAccess,
@@ -105,16 +96,8 @@ import {
   attachSaveChecksum,
   verifySaveIntegrity,
 } from "./src/access/saveIntegrity.js";
-import { getSupabase, isSupabaseConfigured } from "./src/access/supabaseClient.js";
-import {
-  scheduleCloudSync,
-  fetchCloudSaveIfNewer,
-} from "./src/access/cloudSave.js";
-import { startStripeCheckout, refreshSupabaseAccess } from "./src/access/checkout.js";
 import { trackEvent, ANALYTICS } from "./src/access/analytics.js";
 import PaywallScreen from "./src/components/PaywallScreen.jsx";
-import LicenseKeyModal from "./src/components/LicenseKeyModal.jsx";
-import AuthPanel from "./src/components/AuthPanel.jsx";
 import BattleTutorialOverlay, {
   hasSeenBattleTutorial,
   markBattleTutorialSeen,
@@ -755,7 +738,7 @@ const SPRITE_CLASS_KEYS = [
 ];
 
 function catSpritePath(classKey, filename) {
-  return `/sprites/cats/${classKey}/${filename}?v=${__BUILD_ID__}`;
+  return `${import.meta.env.BASE_URL}sprites/cats/${classKey}/${filename}?v=${__BUILD_ID__}`;
 }
 
 const CLASS_SPRITES = Object.fromEntries(
@@ -1332,7 +1315,7 @@ function describeSkillUpgrade(baseSkill, nextLevel, previewAttack = 5, classKey 
 }
 
 function dogSpritePath(spriteKey, filename) {
-  return `/sprites/dogs/${spriteKey}/${filename}?v=${__BUILD_ID__}`;
+  return `${import.meta.env.BASE_URL}sprites/dogs/${spriteKey}/${filename}?v=${__BUILD_ID__}`;
 }
 
 const ENEMY_SPRITES = Object.fromEntries(
@@ -1659,12 +1642,10 @@ function useGameEngine() {
   const autoReduced = useAutoReducedMotion();
   const lowMotion =
     effectsMode === "reduced" || (effectsMode === "auto" && autoReduced);
-  const [accessMode, setAccessMode] = useState(() => getAccessMode());
-  const [licenseModalOpen, setLicenseModalOpen] = useState(false);
-  const [licenseBusy, setLicenseBusy] = useState(false);
-  const [licenseError, setLicenseError] = useState("");
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authEmail, setAuthEmail] = useState("");
+  // Access mode is fixed at build time (demo build = capped, full build =
+  // unlocked); itch.io gates the full build behind purchase. No runtime
+  // license/account/server check.
+  const accessMode = getAccessMode();
 
   const allTimeRecords = save.records;
 
@@ -1717,30 +1698,6 @@ function useGameEngine() {
   autoPausedRef.current = autoPaused;
   autoRestartRef.current = autoRestart;
   lowMotionRef.current = lowMotion;
-
-  useEffect(() => {
-    setAccessMode(getAccessMode());
-    refreshAccessFromServer().catch(() => {});
-    const supabase = getSupabase();
-    if (!supabase) return undefined;
-    supabase.auth.getSession().then(({ data }) => {
-      setAuthEmail(data?.session?.user?.email || "");
-    });
-    const { data: listener } = supabase.auth.onAuthStateChange((_evt, session) => {
-      setAuthEmail(session?.user?.email || "");
-      if (session?.user) {
-        refreshAccessFromServer().catch(() => {});
-        fetchCloudSaveIfNewer(saveRef.current)
-          .then((result) => {
-            if (result?.useCloud && result.save) {
-              commitSave(result.save);
-            }
-          })
-          .catch(() => {});
-      }
-    });
-    return () => listener?.subscription?.unsubscribe?.();
-  }, []);
 
   const battleSpeedMultiplier =
     GAME_CONFIG.battleSpeedOptions[battleSpeedIndex] ?? 1;
@@ -1800,9 +1757,6 @@ function useGameEngine() {
     const persisted = persistSave(nextSave);
     saveRef.current = persisted;
     setSave(persisted);
-    if (getAccessMode() === "full") {
-      scheduleCloudSync(persisted);
-    }
     return persisted;
   }
 
@@ -1810,88 +1764,6 @@ function useGameEngine() {
     const loc = nextLocale === "es" ? "es" : "en";
     setLocale(loc);
     commitSave({ ...saveRef.current, locale: loc });
-  }
-
-  async function submitLicenseKey(key) {
-    setLicenseBusy(true);
-    setLicenseError("");
-    try {
-      const result = await validateLicenseKey(key);
-      if (!result.ok) {
-        setLicenseError(result.error || "invalid");
-        return false;
-      }
-      setAccessMode("full");
-      trackEvent(ANALYTICS.LICENSE_SUCCESS, { source: scene });
-      return true;
-    } catch {
-      setLicenseError("invalid");
-      return false;
-    } finally {
-      setLicenseBusy(false);
-    }
-  }
-
-  async function refreshAccessFromServer() {
-    const purchased = await refreshSupabaseAccess().catch(() => false);
-    if (purchased) {
-      setServerPurchased(true);
-      setAccessMode("full");
-      const nextSave = { ...saveRef.current, purchased: true };
-      commitSave(nextSave);
-      return true;
-    }
-    if (hasServerPurchaseFlag()) {
-      setAccessMode("full");
-      return true;
-    }
-    setAccessMode(getAccessMode());
-    return false;
-  }
-
-  async function authSignIn(email, password) {
-    const supabase = getSupabase();
-    if (!supabase) return;
-    setAuthBusy(true);
-    try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      setAuthEmail(email);
-      await refreshAccessFromServer();
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function authSignUp(email, password) {
-    const supabase = getSupabase();
-    if (!supabase) return;
-    setAuthBusy(true);
-    try {
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) throw error;
-      setAuthEmail(email);
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function authSignOut() {
-    const supabase = getSupabase();
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    setAuthEmail("");
-    setServerPurchased(false);
-    setAccessMode(getAccessMode());
-  }
-
-  async function buyWithStripe() {
-    setAuthBusy(true);
-    try {
-      await startStripeCheckout();
-    } finally {
-      setAuthBusy(false);
-    }
   }
 
   /** The class whose wallet is currently active: the fighter in battle, else the camp selection. */
@@ -3503,11 +3375,6 @@ function useGameEngine() {
     coinPop,
     battleTurn,
     accessMode,
-    licenseModalOpen,
-    licenseBusy,
-    licenseError,
-    authBusy,
-    authEmail,
 
     // Derived
     isPlayerTurn: turn === "player",
@@ -3524,13 +3391,6 @@ function useGameEngine() {
     // Actions
     setScene,
     setLocalePreference,
-    setLicenseModalOpen,
-    setLicenseError,
-    submitLicenseKey,
-    authSignIn,
-    authSignUp,
-    authSignOut,
-    buyWithStripe,
     selectClass,
     startGame,
     continueFromPaywall,
@@ -4276,18 +4136,8 @@ function TitleScreen({
   locale,
   onLocaleChange,
   onHowToFight,
-  onEnterLicense,
   accessMode,
-  authEmail,
-  onAuthSignIn,
-  onAuthSignUp,
-  onAuthSignOut,
-  onBuyStripe,
-  authBusy,
 }) {
-  const [accountOpen, setAccountOpen] = useState(false);
-  const hasAccountPanel = accessMode === "demo" || authEmail || isSupabaseConfigured();
-
   return (
     <div
       style={{
@@ -4410,90 +4260,32 @@ function TitleScreen({
         {t("title.help3")}
       </div>
 
-      {hasAccountPanel && (
-        <div style={{ width: "100%", maxWidth: 320 }}>
-          <button
-            type="button"
-            onClick={() => setAccountOpen((v) => !v)}
-            style={{
-              fontFamily: "'Press Start 2P', monospace",
-              fontSize: 7,
-              padding: "8px 12px",
-              cursor: "pointer",
-              border: "1px solid #2a2a3a",
-              background: "#10102a",
-              color: "#88aaff",
-              width: "100%",
-            }}
-          >
-            {accountOpen ? "▼" : "▶"} {t("title.accountSection") || "Account / Buy"}
-          </button>
-          {accountOpen && (
-            <div
-              style={{
-                marginTop: 10,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: 10,
-              }}
-            >
-              {accessMode === "demo" && (
-                <>
-                  <a
-                    href={PAYHIP_CHECKOUT_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => trackEvent(ANALYTICS.PURCHASE_CLICK, { source: "title" })}
-                    style={{
-                      fontFamily: "'Press Start 2P', monospace",
-                      fontSize: 8,
-                      padding: "10px 18px",
-                      border: "1px solid #00cc77",
-                      background: "#00ff9922",
-                      color: "#00ff99",
-                      textDecoration: "none",
-                      borderRadius: 4,
-                    }}
-                  >
-                    {t("title.buyFull")}
-                  </a>
-                  <button
-                    type="button"
-                    onClick={onEnterLicense}
-                    style={{
-                      fontFamily: "'Press Start 2P', monospace",
-                      fontSize: 7,
-                      padding: "8px 14px",
-                      cursor: "pointer",
-                      border: "1px solid #2a2a3a",
-                      background: "transparent",
-                      color: "#777",
-                    }}
-                  >
-                    {t("title.haveKey")}
-                  </button>
-                </>
-              )}
-
-              <AuthPanel
-                userEmail={authEmail}
-                onSignIn={onAuthSignIn}
-                onSignUp={onAuthSignUp}
-                onSignOut={onAuthSignOut}
-                onBuyStripe={onBuyStripe}
-                busy={authBusy}
-              />
-            </div>
-          )}
-        </div>
+      {accessMode === "demo" && (
+        <a
+          href={ITCH_FULL_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => trackEvent(ANALYTICS.PURCHASE_CLICK, { source: "title" })}
+          style={{
+            fontFamily: "'Press Start 2P', monospace",
+            fontSize: 8,
+            padding: "10px 18px",
+            border: "1px solid #00cc77",
+            background: "#00ff9922",
+            color: "#00ff99",
+            textDecoration: "none",
+            borderRadius: 4,
+          }}
+        >
+          {t("title.buyFull")}
+        </a>
       )}
 
       <div style={{ display: "flex", gap: 10, fontSize: 6 }}>
-        <a href="/terms.html" target="_blank" rel="noreferrer" style={{ color: "#555" }}>
+        <a href="./terms.html" target="_blank" rel="noreferrer" style={{ color: "#555" }}>
           {t("title.terms")}
         </a>
-        <a href="/privacy.html" target="_blank" rel="noreferrer" style={{ color: "#555" }}>
+        <a href="./privacy.html" target="_blank" rel="noreferrer" style={{ color: "#555" }}>
           {t("title.privacy")}
         </a>
       </div>
@@ -5667,17 +5459,7 @@ export default function BossRush() {
             locale={game.locale}
             onLocaleChange={game.setLocalePreference}
             onHowToFight={() => setTitleTutorialOpen(true)}
-            onEnterLicense={() => {
-              game.setLicenseModalOpen(true);
-              game.setLicenseError("");
-            }}
             accessMode={game.accessMode}
-            authEmail={game.authEmail}
-            onAuthSignIn={game.authSignIn}
-            onAuthSignUp={game.authSignUp}
-            onAuthSignOut={game.authSignOut}
-            onBuyStripe={game.buyWithStripe}
-            authBusy={game.authBusy}
           />
           <BattleTutorialOverlay
             open={titleTutorialOpen}
@@ -5750,27 +5532,9 @@ export default function BossRush() {
           floorReached={game.round}
           wallet={game.wallet}
           accessMode={game.accessMode}
-          onEnterLicense={() => {
-            game.setLicenseModalOpen(true);
-            game.setLicenseError("");
-          }}
           onReturnCamp={() => game.setScene("select")}
         />
       )}
-
-      <LicenseKeyModal
-        open={game.licenseModalOpen}
-        busy={game.licenseBusy}
-        error={game.licenseError}
-        onClose={() => game.setLicenseModalOpen(false)}
-        onSubmit={async (key) => {
-          const ok = await game.submitLicenseKey(key);
-          if (ok && game.scene === "paywall") {
-            game.continueFromPaywall();
-          }
-          return ok;
-        }}
-      />
     </LowMotionContext.Provider>
   );
 }

@@ -1,24 +1,10 @@
-/** Demo vs full-game boundary and storage keys. */
+/** Demo vs full-game boundary and the itch.io full-game link. */
 
 export const DEMO_MAX_FLOOR = 100;
 
-export const LICENSE_TOKEN_KEY = "bossRush_license_token";
-export const SUPABASE_SESSION_KEY = "bossRush_supabase_session";
-
-/** Hostnames allowed to run the game (domain lock). */
-export const ALLOWED_HOSTS = [
-  "boss-rush-six.vercel.app",
-  "localhost",
-  "127.0.0.1",
-  "bossrush.gg",
-  "",
-];
-
-export const PAYHIP_CHECKOUT_URL =
-  import.meta.env.VITE_PAYHIP_CHECKOUT_URL ||
-  "https://payhip.com/NJMVentures";
-
-export const STRIPE_ENABLED = Boolean(import.meta.env.VITE_STRIPE_ENABLED);
-
-export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
-export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+/**
+ * Where the demo's "get the full game" button points. Set
+ * VITE_ITCH_FULL_URL to the live itch listing once it exists.
+ */
+export const ITCH_FULL_URL =
+  import.meta.env.VITE_ITCH_FULL_URL || "https://njmventures.itch.io";

@@ -22,12 +22,16 @@ const BATTLE_VOL = 0.4;
 const CAMP_VOL = 0.28;
 const MUTE_KEY = "bossRush_muted";
 
-const START_TRACK = "/audio/start.ogg";
-const CAMP_TRACK = "/audio/camp.ogg";
-const DOGGOD_TRACK_CANDIDATES = ["/audio/doggod.ogg", "/audio/doggod.wav"];
-const BOSS_TRACK = "/audio/boss.ogg";
-const HELL_TRACK = "/audio/themes/hell.ogg";
-const BATTLE_TRACK_CANDIDATES = ["/audio/battle.ogg", "/audio/battle.mp3"];
+// Asset base must be relative for itch.io (served from a sandboxed subpath).
+// import.meta.env.BASE_URL is "./" in the build and "/" in dev.
+const AUDIO_BASE = `${import.meta.env.BASE_URL}audio/`;
+
+const START_TRACK = `${AUDIO_BASE}start.ogg`;
+const CAMP_TRACK = `${AUDIO_BASE}camp.ogg`;
+const DOGGOD_TRACK_CANDIDATES = [`${AUDIO_BASE}doggod.ogg`, `${AUDIO_BASE}doggod.wav`];
+const BOSS_TRACK = `${AUDIO_BASE}boss.ogg`;
+const HELL_TRACK = `${AUDIO_BASE}themes/hell.ogg`;
+const BATTLE_TRACK_CANDIDATES = [`${AUDIO_BASE}battle.ogg`, `${AUDIO_BASE}battle.mp3`];
 
 const THEME_FALLBACK_ID = "human";
 const FREEPLAY_THEME_ID = "angelic";
@@ -41,10 +45,10 @@ const LOOP_TAIL_TRIM_BY_SRC = {
   [CAMP_TRACK]: 0.06,
   [BOSS_TRACK]: 0.08,
   [HELL_TRACK]: 0.08,
-  "/audio/battle.ogg": 0.08,
-  "/audio/battle.mp3": 0.05,
-  "/audio/doggod.ogg": 0.08,
-  "/audio/doggod.wav": 0.08,
+  [`${AUDIO_BASE}battle.ogg`]: 0.08,
+  [`${AUDIO_BASE}battle.mp3`]: 0.05,
+  [`${AUDIO_BASE}doggod.ogg`]: 0.08,
+  [`${AUDIO_BASE}doggod.wav`]: 0.08,
 };
 
 let campAudio = null;
@@ -269,7 +273,7 @@ async function resolveBattleTrackSrc(round, { autoEnabled = false } = {}) {
   let themeId = themeIdForRound(round);
   if (themeId === "freeplay") themeId = FREEPLAY_THEME_ID;
   if (!THEME_IDS.includes(themeId)) themeId = THEME_FALLBACK_ID;
-  return `/audio/themes/${themeId}.ogg`;
+  return `${AUDIO_BASE}themes/${themeId}.ogg`;
 }
 
 export async function playThemeForRound(round, { autoEnabled = false } = {}) {

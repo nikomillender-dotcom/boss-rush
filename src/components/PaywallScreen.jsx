@@ -1,5 +1,5 @@
 import { t } from "../i18n/index.js";
-import { PAYHIP_CHECKOUT_URL } from "../access/constants.js";
+import { ITCH_FULL_URL } from "../access/constants.js";
 import { trackEvent, ANALYTICS } from "../access/analytics.js";
 
 const COLORS = {
@@ -23,11 +23,10 @@ const screenShell = {
 export default function PaywallScreen({
   floorReached,
   wallet,
-  onEnterLicense,
   onReturnCamp,
   accessMode,
 }) {
-  const buyUrl = PAYHIP_CHECKOUT_URL;
+  const buyUrl = ITCH_FULL_URL;
 
   return (
     <div
@@ -74,22 +73,6 @@ export default function PaywallScreen({
       >
         {t("paywall.buy")}
       </a>
-
-      <button
-        type="button"
-        onClick={onEnterLicense}
-        style={{
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: 8,
-          padding: "10px 20px",
-          cursor: "pointer",
-          border: "1px solid #3a3a5a",
-          background: "#101020",
-          color: COLORS.text,
-        }}
-      >
-        {t("paywall.haveKey")}
-      </button>
 
       <button
         type="button"
