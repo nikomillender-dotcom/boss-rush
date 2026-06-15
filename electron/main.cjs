@@ -74,10 +74,11 @@ function startServer() {
 async function createWindow() {
   const port = await startServer();
   const win = new BrowserWindow({
-    width: 1024,
-    height: 720,
-    minWidth: 380,
+    width: 1280,
+    height: 800,
+    minWidth: 820,
     minHeight: 600,
+    show: false,
     backgroundColor: "#0a0a14",
     title: "Meow Rush: Gauntlet",
     autoHideMenuBar: true,
@@ -87,6 +88,12 @@ async function createWindow() {
     },
   });
   Menu.setApplicationMenu(null);
+  // Open maximized so the landscape layouts always have the width (regardless
+  // of display DPI). The 820 minWidth keeps it above the 760 breakpoint.
+  win.once("ready-to-show", () => {
+    win.maximize();
+    win.show();
+  });
 
   // Keep our own pages in-app; send any real external links to the browser.
   win.webContents.setWindowOpenHandler(({ url }) => {

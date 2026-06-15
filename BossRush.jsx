@@ -1625,6 +1625,17 @@ function useIsWide() {
   return matches;
 }
 
+/** Tag <body data-scene="..."> for the active scene so CSS can widen #root
+ *  per scene on desktop (landscape). Cleans up on unmount. */
+function useSceneTag(name) {
+  useEffect(() => {
+    document.body.dataset.scene = name;
+    return () => {
+      if (document.body.dataset.scene === name) delete document.body.dataset.scene;
+    };
+  }, [name]);
+}
+
 function useGameEngine() {
   const [save, setSave] = useState(() => {
     const loaded = loadSave();
@@ -4523,13 +4534,15 @@ function ShopScreen({
   const atkBatch = batchInfo(SHOP_CONFIG.atkPrice, classMeta?.atkBoost ?? 0, shopMaxBoost);
   const defBatch = batchInfo(SHOP_CONFIG.defPrice, classMeta?.defBoost ?? 0, shopMaxBoost);
   const respecRefund = classMeta ? computeRespecRefund(classMeta, classKey) : 0;
+  const isWide = useIsWide();
+  useSceneTag("shop");
 
   return (
     <div
       className="shop-screen-scroll"
       style={{
         ...screenShellScroll,
-        maxWidth: 440,
+        maxWidth: isWide ? 1040 : 440,
         margin: "0 auto",
         width: "100%",
         display: "flex",
@@ -4588,6 +4601,25 @@ function ShopScreen({
         </div>
       )}
 
+      <div
+        style={{
+          display: "flex",
+          flexDirection: isWide ? "row" : "column",
+          gap: isWide ? 16 : 6,
+          alignItems: "flex-start",
+          width: "100%",
+        }}
+      >
+      <div
+        style={{
+          flex: isWide ? "1 1 0" : undefined,
+          minWidth: 0,
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
       {classMeta && (
         <ShopSection title={boostsTitle}>
           <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
@@ -4677,9 +4709,20 @@ function ShopScreen({
           </button>
         </ShopSection>
       )}
+      </div>
+      <div
+        style={{
+          flex: isWide ? "1 1 0" : undefined,
+          minWidth: 0,
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
 
       {classMeta && weapons.length > 0 && (
-        <ShopSection title={t("shop.weapons")} defaultOpen={false}>
+        <ShopSection title={t("shop.weapons")} defaultOpen={isWide}>
           <div
             style={{
               display: "grid",
@@ -4735,7 +4778,7 @@ function ShopScreen({
       )}
 
       {classMeta && (
-        <ShopSection title={t("shop.skillUpgrades")} defaultOpen={false}>
+        <ShopSection title={t("shop.skillUpgrades")} defaultOpen={isWide}>
           {skillBases.map((rawBase) => {
             const base = localizeSkillTemplate(rawBase);
             const level = classMeta.skillLevels[rawBase.id] ?? 0;
@@ -4763,6 +4806,8 @@ function ShopScreen({
           })}
         </ShopSection>
       )}
+      </div>
+      </div>
 
       {/* Sticky footer: AUTO-RESTART toggle + START + Back */}
       <div
@@ -4932,6 +4977,8 @@ function ClassCard({ classKey, cls, onSelect, disabled, hint, hidden }) {
 }
 
 function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRecords, accessMode }) {
+  const isWide = useIsWide();
+  useSceneTag("select");
   return (
     <div
       style={{
@@ -4991,15 +5038,17 @@ function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRec
           flex: 1,
           minHeight: 0,
           width: "100%",
-          maxWidth: 380,
+          maxWidth: isWide ? 900 : 380,
           overflowY: "auto",
           overflowX: "hidden",
           WebkitOverflowScrolling: "touch",
           overscrollBehavior: "contain",
           touchAction: "pan-y",
-          display: "flex",
+          display: isWide ? "grid" : "flex",
+          gridTemplateColumns: isWide ? "repeat(2, 1fr)" : undefined,
+          justifyItems: isWide ? "center" : undefined,
           flexDirection: "column",
-          alignItems: "center",
+          alignItems: isWide ? "start" : "center",
           gap: 12,
           paddingBottom: 12,
         }}
@@ -5048,6 +5097,7 @@ function ClassSelectScreen({ onSelect, onReturnToStart, wallet, save, allTimeRec
             border: "1px solid #1a1a22",
             borderRadius: 8,
             boxSizing: "border-box",
+            gridColumn: isWide ? "1 / -1" : undefined,
           }}
         >
           <div
@@ -5191,15 +5241,9 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
     setTutorialOpen(false);
   };
 
-  // Wide-screen (desktop) landscape layout for the battle arena. Tags <body>
-  // so CSS can widen #root only while in battle (other scenes stay columnar).
+  // Wide-screen (desktop) landscape layout; useSceneTag widens #root via CSS.
   const isWide = useIsWide();
-  useEffect(() => {
-    document.body.dataset.scene = "battle";
-    return () => {
-      delete document.body.dataset.scene;
-    };
-  }, []);
+  useSceneTag("battle");
 
   const {
     player,

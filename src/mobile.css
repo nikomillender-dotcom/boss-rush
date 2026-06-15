@@ -51,12 +51,15 @@ button,
   }
 }
 
-/* Desktop landscape: while in battle, let the column widen so the two
-   combatants sit side by side. Other scenes keep the framed column above. */
+/* Desktop landscape: widen #root per scene so each can use the horizontal
+   space. The 600px framed 440 column above is the 600-759px / portrait
+   fallback; these override it at >=760px (more specific selector + later). */
 @media (min-width: 760px) {
-  body[data-scene="battle"] #root {
-    max-width: 960px;
-  }
+  body[data-scene="battle"] #root { max-width: 960px; }
+  body[data-scene="shop"]   #root { max-width: 1040px; }
+  body[data-scene="select"] #root { max-width: 980px; }
+  /* title + gameover intentionally keep the framed 440 column (centered
+     hero screens read fine); their 2-up polish is deferred pending review. */
 }
 
 @media (max-width: 480px) {
