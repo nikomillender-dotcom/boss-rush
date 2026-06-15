@@ -1608,6 +1608,23 @@ function useAutoReducedMotion() {
   return matches;
 }
 
+/** Reactive matchMedia for wide screens (enables the desktop landscape layout). */
+function useIsWide() {
+  const query = "(min-width: 760px)";
+  const [matches, setMatches] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  return matches;
+}
+
 function useGameEngine() {
   const [save, setSave] = useState(() => {
     const loaded = loadSave();
@@ -5174,6 +5191,16 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
     setTutorialOpen(false);
   };
 
+  // Wide-screen (desktop) landscape layout for the battle arena. Tags <body>
+  // so CSS can widen #root only while in battle (other scenes stay columnar).
+  const isWide = useIsWide();
+  useEffect(() => {
+    document.body.dataset.scene = "battle";
+    return () => {
+      delete document.body.dataset.scene;
+    };
+  }, []);
+
   const {
     player,
     enemy,
@@ -5241,7 +5268,7 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
         animation: bgAnimation,
         display: "flex",
         flexDirection: "column",
-        maxWidth: 440,
+        maxWidth: isWide ? 900 : 440,
         margin: "0 auto",
         width: "100%",
         gap: 10,
@@ -5259,7 +5286,7 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
         streakPop={streakPop}
       />
 
-      {/* Arena */}
+      {/* Arena — vertical (mobile) or side-by-side (desktop landscape) */}
       <div
         style={{
           background: "rgba(255,255,255,0.02)",
@@ -5267,73 +5294,89 @@ function BattleScene({ game, musicMuted, onToggleMusic }) {
           borderRadius: 8,
           padding: "14px 12px",
           display: "flex",
-          flexDirection: "column",
+          flexDirection: isWide ? "row" : "column",
+          alignItems: isWide ? "stretch" : undefined,
           gap: 10,
         }}
       >
         {/* Enemy */}
-        {enemy && (
-          <CombatantDisplay
-            name={enemy.name}
-            hp={enemy.hp}
-            maxHp={enemy.maxHp}
-            icon={enemy.icon}
-            spriteSrc={getEnemyCombatSpriteUrl(
-              enemy,
-              getEnemyCombatSpriteState(
-                enemy.hp,
-                enemy.maxHp,
-                player?.attack ?? 0,
-                enemy
-              )
-            )}
-            spriteFlip={enemy.flipSprite}
-            isPlayer={false}
-            isDead={enemy.hp <= 0}
-            floats={enemyFloats}
-            shaking={shakeTarget === "enemy"}
-          />
-        )}
+        <div style={{ flex: isWide ? "1 1 0" : undefined, minWidth: 0 }}>
+          {enemy && (
+            <CombatantDisplay
+              name={enemy.name}
+              hp={enemy.hp}
+              maxHp={enemy.maxHp}
+              icon={enemy.icon}
+              spriteSrc={getEnemyCombatSpriteUrl(
+                enemy,
+                getEnemyCombatSpriteState(
+                  enemy.hp,
+                  enemy.maxHp,
+                  player?.attack ?? 0,
+                  enemy
+                )
+              )}
+              spriteFlip={enemy.flipSprite}
+              isPlayer={false}
+              isDead={enemy.hp <= 0}
+              floats={enemyFloats}
+              shaking={shakeTarget === "enemy"}
+            />
+          )}
+        </div>
 
         {/* Divider */}
         <div
-          style={{
-            borderTop: "1px solid #181825",
-            textAlign: "center",
-            fontSize: 8,
-            color: "#202030",
-            letterSpacing: 5,
-            padding: "3px 0",
-            fontFamily: "'Press Start 2P', monospace",
-          }}
+          style={
+            isWide
+              ? {
+                  alignSelf: "center",
+                  fontSize: 8,
+                  color: "#202030",
+                  letterSpacing: 2,
+                  padding: "0 6px",
+                  fontFamily: "'Press Start 2P', monospace",
+                }
+              : {
+                  borderTop: "1px solid #181825",
+                  textAlign: "center",
+                  fontSize: 8,
+                  color: "#202030",
+                  letterSpacing: 5,
+                  padding: "3px 0",
+                  fontFamily: "'Press Start 2P', monospace",
+                }
+          }
         >
           {t("battle.vs")}
         </div>
 
         {/* Player */}
-        {player && (
-          <CombatantDisplay
-            name={player.name}
-            hp={player.hp}
-            maxHp={player.maxHp}
-            icon={player.icon}
-            spriteSrc={getPlayerCombatSpriteUrl(
-              player.classKey,
-              getPlayerCombatSpriteState(
-                player.hp,
-                player.maxHp,
-                enemy,
-                player.attack,
-                round
-              )
-            )}
-            isPlayer={true}
-            isDead={false}
-            floats={playerFloats}
-            shaking={shakeTarget === "player"}
-            buffs={playerBuffs}
-          />
-        )}
+        <div style={{ flex: isWide ? "1 1 0" : undefined, minWidth: 0 }}>
+          {player && (
+            <CombatantDisplay
+              name={player.name}
+              hp={player.hp}
+              maxHp={player.maxHp}
+              icon={player.icon}
+              spriteSrc={getPlayerCombatSpriteUrl(
+                player.classKey,
+                getPlayerCombatSpriteState(
+                  player.hp,
+                  player.maxHp,
+                  enemy,
+                  player.attack,
+                  round
+                )
+              )}
+              isPlayer={true}
+              isDead={false}
+              floats={playerFloats}
+              shaking={shakeTarget === "player"}
+              buffs={playerBuffs}
+            />
+          )}
+        </div>
       </div>
 
       {bossBlocksAuto && (

@@ -51,6 +51,14 @@ button,
   }
 }
 
+/* Desktop landscape: while in battle, let the column widen so the two
+   combatants sit side by side. Other scenes keep the framed column above. */
+@media (min-width: 760px) {
+  body[data-scene="battle"] #root {
+    max-width: 960px;
+  }
+}
+
 @media (max-width: 480px) {
   /* Zoom the whole game out on phones so dense screens (camp, battle) fit
      with breathing room. `zoom` is supported on iOS Safari + Chrome. */
